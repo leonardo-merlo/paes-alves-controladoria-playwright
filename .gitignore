@@ -1,0 +1,25 @@
+# Credenciais — nunca commitar
+.env
+
+# Ambiente virtual Python
+venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Saídas geradas pelo sistema
+outputs/
+drafts/
+inputs/
+debug_outputs/
+
+# Arquivos de debug do Chrome
+/tmp/
+
+# Claude — ferramentas locais, não versionar
+.claude/
+
+# Logs de tarefas em background / saída do agente
+*.output
