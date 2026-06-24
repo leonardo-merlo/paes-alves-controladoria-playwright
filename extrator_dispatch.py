@@ -12,8 +12,9 @@ from rupe_extractor import extrair_processo as _extrair_rupe
 EXTRATORES = {
     "pje_tjmg":       _extrair_pje_tjmg,
     "eproc_tjmg":     _extrair_eproc_tjmg,
-    "eproc_trf6":     _extrair_eproc_tjmg,  # mesmo extrator — host resolvido pelo CNJ
-    "pje_tjmg_2inst": _extrair_rupe,        # 2ª instância TJMG (RUPE)
+    "eproc_trf6":     _extrair_eproc_tjmg,   # JFMG 1ª instância — host resolvido pelo CNJ
+    "eproc_trf6_2g":  _extrair_eproc_tjmg,   # TRF6 2ª instância — mesmo extrator, host diferente
+    "pje_tjmg_2inst": _extrair_rupe,         # 2ª instância TJMG (RUPE)
 }
 
 # sistemas conhecidos mas ainda não implementados

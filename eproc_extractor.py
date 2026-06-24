@@ -41,8 +41,9 @@ MAX_DOCS = 300
 
 # eProc por tribunal (mesmo software INFRA, muda só o host)
 SISTEMAS_EPROC = {
-    "eproc_tjmg": {"host": "eproc1g.tjmg.jus.br", "base": "https://eproc1g.tjmg.jus.br/eproc/"},
-    "eproc_trf6": {"host": "eproc1g.trf6.jus.br", "base": "https://eproc1g.trf6.jus.br/eproc/"},
+    "eproc_tjmg":    {"host": "eproc1g.tjmg.jus.br", "base": "https://eproc1g.tjmg.jus.br/eproc/"},
+    "eproc_trf6":    {"host": "eproc1g.trf6.jus.br", "base": "https://eproc1g.trf6.jus.br/eproc/"},   # JFMG 1ª instância
+    "eproc_trf6_2g": {"host": "eproc2g.trf6.jus.br", "base": "https://eproc2g.trf6.jus.br/eproc/"},   # TRF6 2ª instância
 }
 _DEFAULT_SISTEMA = "eproc_tjmg"
 
@@ -115,47 +116,41 @@ async def verificar_sessao(page: Page) -> bool:
         return False
     if await _esta_deslogado(page):
         return False
-    # sessão viva = busca rápida presente
-    try:
-        return await page.evaluate(
-            f"!!document.querySelector('{SELECTORS['campo_busca']}')"
-        )
-    except Exception:
-        return False
+    # painel_adv_listar e outras páginas do eProc não têm a busca rápida mas são sessões válidas
+    # pesquisar_processo() navega ao painel principal se o campo não estiver presente
+    return True
 
 
 async def pesquisar_processo(page: Page, numero_cnj: str, base: str) -> None:
     campo = SELECTORS["campo_busca"]
     tem_campo = await page.evaluate(f"!!document.querySelector('{campo}')")
     if not tem_campo:
-        # tentar voltar ao painel
+        # aceitar automaticamente o alert "Usuário logado como..." que o eProc exibe
+        page.once("dialog", lambda d: asyncio.ensure_future(d.accept()))
         await page.goto(base + "controlador.php?acao=principal", wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
 
     await page.fill(campo, numero_cnj)
-    await page.press(campo, "Enter")
+    try:
+        await page.press(campo, "Enter")
+    except Exception:
+        # fallback: servidor lento não respondeu ao keypress — submeter via JS não bloqueia
+        await page.evaluate(f"document.querySelector('{campo}').form.submit()")
 
-    # aguardar a página do processo (tabela de eventos) ou detectar logout
-    for _ in range(20):
-        await page.wait_for_timeout(1000)
+    # aguardar a tabela de eventos (até 45s — servidores lentos podem levar 30s+)
+    try:
+        await page.wait_for_selector(SELECTORS["tabela_eventos"], timeout=45_000, state="attached")
+    except Exception:
+        # verificar se acabou em `processo_selecionar` (lista de resultados) ou logout
         if "processo_selecionar" in page.url:
-            break
-        tem_tabela = await page.evaluate(
-            f"!!document.querySelector('{SELECTORS['tabela_eventos']}')"
-        )
-        if tem_tabela:
-            break
-        if await _esta_deslogado(page):
+            pass  # ok — encontrou processo, selecionador vai aparecer
+        elif await _esta_deslogado(page):
             raise RuntimeError("sessao_expirada")
-
-    tem_tabela = await page.evaluate(
-        f"!!document.querySelector('{SELECTORS['tabela_eventos']}')"
-    )
-    if not tem_tabela:
-        raise RuntimeError(
-            f"Tabela de eventos não encontrada para {numero_cnj} — "
-            "processo não localizado ou sessão expirada"
-        )
+        else:
+            raise RuntimeError(
+                f"Tabela de eventos não encontrada para {numero_cnj} — "
+                "processo não localizado ou sessão expirada"
+            )
 
 
 def _parse_data(texto: str) -> datetime | None:
@@ -420,6 +415,7 @@ async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> di
             "metadados_timeline": eventos,
             "documentos":         documentos,
             "erros":              [d for d in documentos if d.get("erro")],
+            "incremental":        bool(data_corte),
         }
 
     except RuntimeError as e:

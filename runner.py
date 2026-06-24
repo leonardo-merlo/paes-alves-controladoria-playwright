@@ -19,7 +19,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from analyzer import analisar_processo
 from cnj_router import rotear_lista, CNJInfo
 from extrator_dispatch import obter_extrator, esta_implementado, descricao_pendente
-from sistema_auth import preparar_autenticacao
+from sistema_auth import preparar_autenticacao, monitorar_logins_e_processar
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 
 INPUTS_DIR = Path("inputs")
@@ -151,36 +151,68 @@ async def processar_cnj(
     if not extrator:
         return None  # não deve chegar aqui — filtrado antes
 
-    if data_corte:
-        print(f"{prefixo} — extraindo (a partir de {data_corte[:10]})...")
-    else:
-        print(f"{prefixo} — extraindo (todos os documentos)...")
-    resultado = await extrator(info.numero_cnj, data_corte=data_corte)
+    MAX_TENTATIVAS = 3
+    resultado = None
 
-    if resultado.get("erro"):
-        print(f"{prefixo} — ERRO extração: {resultado['erro']}")
-        return resultado
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        sufixo = f" (tentativa {tentativa}/{MAX_TENTATIVAS})" if tentativa > 1 else ""
+        if data_corte:
+            print(f"{prefixo} — extraindo (a partir de {data_corte[:10]}){sufixo}...")
+        else:
+            print(f"{prefixo} — extraindo (todos os documentos){sufixo}...")
 
-    print(f"{prefixo} — {resultado.get('total_documentos', 0)} doc(s)")
+        resultado = await extrator(info.numero_cnj, data_corte=data_corte)
+
+        if resultado.get("erro"):
+            erro_msg = resultado["erro"]
+            _permanente = ("sessao_expirada", "Nenhuma aba", "Não foi possível conectar")
+            eh_permanente = any(p in erro_msg for p in _permanente)
+            if eh_permanente or tentativa == MAX_TENTATIVAS:
+                print(f"{prefixo} — ERRO extração: {erro_msg}")
+                return resultado
+            print(f"{prefixo} — ERRO temporário ({erro_msg}) — retentando em 10s...")
+            await asyncio.sleep(10)
+            continue
+
+        total = resultado.get("total_documentos", 0)
+        print(f"{prefixo} — {total} doc(s)")
+
+        if total > 0:
+            break
+
+        if tentativa < MAX_TENTATIVAS:
+            print(f"{prefixo} — 0 documentos, retentando em 5s...")
+            await asyncio.sleep(5)
+
+    if resultado.get("total_documentos", 0) == 0:
+        print(f"{prefixo} — ERRO: nenhum documento após {MAX_TENTATIVAS} tentativa(s)")
+        return {"erro": "sem_documentos", "numero_cnj": info.numero_cnj}
 
     print(f"{prefixo} — analisando com Claude...")
     analise = analisar_processo(info.numero_cnj, resultado)
 
     if analise.get("erro"):
-        print(f"{prefixo} — ERRO análise: {analise['erro']}")
-    else:
-        status    = analise.get("status_sugerido", "?")
-        resp      = analise.get("responsavel_sugerido", "?")
-        prazo     = analise.get("prazo_fatal_dias_uteis")
-        risco     = analise.get("classificacao_risco", "?")
-        prazo_str = f"{prazo} d.u." if prazo else "sem prazo"
-        print(f"{prefixo} — {status} | {resp} | {prazo_str} | {risco}")
+        # análise falhou mesmo após retries — não grava rascunho vazio nem marca
+        # 'processado'; retorna erro para o CNJ cair em erro_browser e reprocessar.
+        print(f"{prefixo} — ERRO análise: {analise['erro']} — marcando p/ reprocessar")
+        return {"erro": "analise_falhou", "numero_cnj": info.numero_cnj}
 
+    status    = analise.get("status_sugerido", "?")
+    resp      = analise.get("responsavel_sugerido", "?")
+    prazo     = analise.get("prazo_fatal_dias_uteis")
+    risco     = analise.get("classificacao_risco", "?")
+    prazo_str = f"{prazo} d.u." if prazo else "sem prazo"
+    print(f"{prefixo} — {status} | {resp} | {prazo_str} | {risco}")
+
+    n_docs = len(resultado.get("documentos") or [])
+    print(f"{prefixo} — salvando {n_docs} doc(s) no Supabase...")
     sb = salvar_no_supabase(info.numero_cnj, resultado, analise)
     if sb.get("ok"):
-        print(f"{prefixo} — salvo (id: {sb['processo_id'][:8]}...)")
+        print(f"{prefixo} — salvo OK (id: {sb['processo_id'][:8]}...)")
     else:
-        print(f"{prefixo} — ERRO Supabase: {sb['erro']}")
+        print(f"{prefixo} — ERRO Supabase: {sb.get('erro')}")
+        print(sb.get("tb", "(sem traceback)"))
+        return {"erro": "supabase_falhou", "numero_cnj": info.numero_cnj}
 
     return resultado
 
@@ -193,6 +225,7 @@ async def processar_por_sistema(
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
     modo_auto: bool = False,
+    progresso_cb=None,
 ) -> tuple[list[str], list[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
@@ -232,32 +265,49 @@ async def processar_por_sistema(
         print("Nenhum CNJ para processar.")
         return [], []
 
-    # autenticação única para todos os sistemas necessários
     sistemas_necessarios = list(por_sistema.keys())
-    ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=modo_auto)
-    if not ok:
-        return [], []
-
     ids_ok: list[str] = []
     ids_erro: list[str] = []
+    total_global = sum(len(v) for v in por_sistema.values())
+    processados_global = 0
 
-    for sistema, infos in por_sistema.items():
+    async def _processar_sistema(sistema: str) -> None:
+        nonlocal processados_global
+        infos = por_sistema[sistema]
         total = len(infos)
         print(f"{'='*50}")
         print(f"[{sistema}] {total} CNJ(s)\n")
-
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
-
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
             if resultado and not resultado.get("erro") and cnj_id:
                 ids_ok.append(cnj_id)
             elif cnj_id:
                 ids_erro.append(cnj_id)
-
+            processados_global += 1
+            if progresso_cb:
+                progresso_cb(processados_global, total_global)
         print()
+
+    if modo_auto:
+        processados = await monitorar_logins_e_processar(sistemas_necessarios, _processar_sistema)
+        nao_processados = [s for s in sistemas_necessarios if s not in processados]
+        if ids_map and nao_processados:
+            ids_timeout = [
+                ids_map[info.numero_cnj]
+                for s in nao_processados
+                for info in por_sistema.get(s, [])
+                if info.numero_cnj in ids_map
+            ]
+            marcar_supabase(ids_timeout, "erro_browser", "Sistema indisponível ou timeout de login")
+    else:
+        ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
+        if not ok:
+            return [], []
+        for sistema in sistemas_necessarios:
+            await _processar_sistema(sistema)
 
     # ids de CNJs não implementados → ignorado
     if ids_map:
@@ -269,7 +319,7 @@ async def processar_por_sistema(
 
 # ── modos de execução ─────────────────────────────────────────────
 
-async def modo_supabase(modo_auto: bool = False) -> dict:
+async def modo_supabase(modo_auto: bool = False, progresso_cb=None) -> dict:
     """Processa os pendentes do Supabase. Retorna resumo {total, processados, erros}."""
     pendentes = ler_cnjs_supabase()
     if not pendentes:
@@ -279,13 +329,16 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
     numeros = [p["numero_cnj"] for p in pendentes]
     ids_map = {p["numero_cnj"]: p["id"] for p in pendentes}
     corte_map = {p["numero_cnj"]: p.get("data_ultima_consulta") for p in pendentes}
-    cnjs = rotear_lista(numeros)
+    hints = {p["numero_cnj"]: p.get("sistema") for p in pendentes}
+    cnjs = rotear_lista(numeros, hints)
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro = await processar_por_sistema(cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto)
+    ids_ok, ids_erro = await processar_por_sistema(cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto, progresso_cb=progresso_cb)
+    print(f"ids_ok={ids_ok}")
+    print(f"ids_erro={ids_erro}")
     marcar_supabase(ids_ok, "processado")
-    marcar_supabase(ids_erro, "ignorado", "Erro durante processamento")
+    marcar_supabase(ids_erro, "erro_browser", "Erro durante processamento")
     print(f"Concluído: {len(ids_ok)} processados, {len(ids_erro)} com erro")
     return {"total": len(cnjs), "processados": len(ids_ok), "erros": len(ids_erro)}
 

@@ -39,6 +39,10 @@ from eproc_extractor import _garantir_pdfjs  # carrega PDF.js na página (reapro
 CDP_URL = "http://localhost:9222"
 TIMEOUT = 20_000
 MAX_DOCS = 300
+# Algumas peças do RUPE não baixam (o servidor trava ao montar o PDF assinado).
+# Timeout curto no download faz pular rápido em vez de arrastar o lote inteiro.
+DOWNLOAD_TIMEOUT_MS = 10_000   # peça boa baixa em <1,5s; peça que o servidor não entrega falha rápido
+PARSE_TIMEOUT_S = 30           # teto p/ extração de texto via PDF.js (maior peça boa ~14s)
 
 HOST = "pe.tjmg.jus.br"
 BASE = "https://pe.tjmg.jus.br"
@@ -134,12 +138,15 @@ async def pesquisar_processo(page: Page, numero_cnj: str) -> str:
     onclick = None
     for _ in range(25):
         await page.wait_for_timeout(800)
-        onclick = await page.evaluate(
-            """() => {
-                const img = document.querySelector('img[src*="visualizar"]');
-                return img ? img.getAttribute('onclick') : null;
-            }"""
-        )
+        try:
+            onclick = await page.evaluate(
+                """() => {
+                    const img = document.querySelector('img[src*="visualizar"]');
+                    return img ? img.getAttribute('onclick') : null;
+                }"""
+            )
+        except Exception:
+            continue  # contexto destruído por navegação em curso — aguardar próxima iteração
         if onclick:
             break
 
@@ -231,9 +238,9 @@ async def _baixar_e_extrair_pdf(page: Page, url: str) -> dict:
     página. PDF escaneado (sem camada de texto) → texto vazio com marca explícita.
     """
     try:
-        resp = await page.context.request.get(url, timeout=60_000)
+        resp = await page.context.request.get(url, timeout=DOWNLOAD_TIMEOUT_MS)
     except Exception as e:
-        return {"texto": "", "erro": f"download_falhou: {e}", "content_type": None}
+        return {"texto": "", "erro": f"download_falhou: {str(e).splitlines()[0]}", "content_type": None}
     if resp.status != 200:
         return {"texto": "", "erro": f"http_{resp.status}", "content_type": None}
 
@@ -252,24 +259,28 @@ async def _baixar_e_extrair_pdf(page: Page, url: str) -> dict:
         return {"texto": texto, "erro": None, "content_type": ct or "text/html"}
 
     b64 = base64.b64encode(body).decode("ascii")
-    texto = await page.evaluate(r"""
-        async (b64) => {
-            if (!window.pdfjsLib) return 'ERRO_PDFJS: lib não carregada';
-            try {
-                const bin = atob(b64);
-                const arr = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
-                let t = '';
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const pg = await pdf.getPage(i);
-                    const c = await pg.getTextContent();
-                    t += c.items.map(s => s.str).join(' ') + '\n';
-                }
-                return t.trim();
-            } catch (e) { return 'ERRO_PDFJS: ' + e.message; }
-        }
-    """, b64)
+    try:
+        texto = await asyncio.wait_for(page.evaluate(r"""
+            async (b64) => {
+                if (!window.pdfjsLib) return 'ERRO_PDFJS: lib não carregada';
+                try {
+                    const bin = atob(b64);
+                    const arr = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                    const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+                    let t = '';
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const pg = await pdf.getPage(i);
+                        const c = await pg.getTextContent();
+                        t += c.items.map(s => s.str).join(' ') + '\n';
+                    }
+                    return t.trim();
+                } catch (e) { return 'ERRO_PDFJS: ' + e.message; }
+            }
+        """, b64), timeout=PARSE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return {"texto": "", "erro": f"[PDF.js excedeu {PARSE_TIMEOUT_S}s — peça pulada]",
+                "content_type": "application/pdf"}
 
     if texto.startswith("ERRO_PDFJS"):
         return {"texto": "", "erro": texto, "content_type": "application/pdf"}
@@ -364,6 +375,7 @@ async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> di
             "metadados_timeline": pecas,
             "documentos":         documentos,
             "erros":              [d for d in documentos if d.get("erro")],
+            "incremental":        bool(data_corte),
         }
 
     except RuntimeError as e:

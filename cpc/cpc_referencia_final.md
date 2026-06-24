@@ -6,13 +6,32 @@ Lei nº 13.105/2015 | Controladoria Jurídica — Paes Pequeno Advocacia
 
 ────────────────────────────────────────────────────────────────────────────────
 
-PRÓXIMOS PASSOS — Itens para Reunião com Henrique
+DEFINIÇÕES DO ESCRITÓRIO — CONFIRMADAS (PRIORIDADE MÁXIMA NA CONTAGEM DE PRAZOS)
 
-⚠ Feriados Locais: Fornecer lista de feriados municipais de Muriaé e estaduais de MG (2026/2027). Sem isso a IA erra na contagem de dias úteis.
+0.1 Feriados e dias sem expediente forense (2026/2027)
 
-⚠ Juizados Especiais (JEC): Definir se o escritório atua em causas de JEC (Lei 9.099/95). Os prazos e ritos são diferentes do procedimento comum.
+Ao contar dias úteis e converter para a data final ("até DD/MM/AAAA"), trate como dias SEM expediente: sábados, domingos, o recesso forense (20/12 a 20/01) e as datas abaixo. Pontos facultativos costumam ficar sem expediente no Judiciário; se um prazo terminar em ponto facultativo (ou no 1º dia útil seguinte a ele), preencha 'alerta' pedindo confirmação ao responsável.
 
-⚠ Processos Físicos vs. Eletrônicos: Confirmar se existem processos físicos. O prazo em dobro do Art. 229 NÃO se aplica a processos eletrônicos.
+Feriados nacionais 2026:
+01/01 Confraternização Universal | 16/02 e 17/02 Carnaval | 18/02 Quarta-feira de Cinzas (ponto facultativo) | 03/04 Sexta-feira Santa | 21/04 Tiradentes / Data Magna MG | 01/05 Dia do Trabalhador | 04/06 Corpus Christi (ponto facultativo) | 07/09 Independência | 12/10 Nossa Senhora Aparecida | 02/11 Finados | 15/11 Proclamação da República | 20/11 Consciência Negra | 25/12 Natal
+
+Feriados municipais — aplicar conforme a comarca/cidade do processo:
+- Muriaé — 2026: 15/02, 29/06 (São Pedro), 06/09 | 2027: 15/02, 29/06, 06/09
+- Leopoldina — 2026: 20/01 (São Sebastião), 27/04 (Aniversário) | 2027: 20/01, 27/04
+- Recreio — 2026: 20/01 (São Sebastião), 27/06 (Santo Antônio), 08/12 (Imaculada Conceição) | 2027: 20/01, 27/06, 08/12
+- Palma — 2026: 24/05 (Aniversário), 04/10 (São Francisco de Assis), 08/12 (Imaculada Conceição), 13/12 (Santa Luzia) | 2027: 24/05, 04/10, 08/12, 13/12
+- Miradouro — 2026: 22/05 (Santa Rita de Cássia), 17/12 (Emancipação Política) | 2027: 22/05, 17/12
+- Eugenópolis — 2026: 20/01 (São Sebastião), 03/05 (Aniversário) | 2027: 20/01, 03/05
+
+⚠ Pendente: feriados NACIONAIS de 2027 ainda não listados — adicionar quando disponíveis.
+
+0.2 Juizados Especiais (JEC — Lei 9.099/95)
+
+O escritório atua em causas de JEC, porém em pequena quantidade. Quando identificar que o processo tramita em Juizado Especial (a vara/classe costuma indicar "Juizado Especial"), os prazos e ritos seguem a Lei 9.099/95, que difere do procedimento comum do CPC. Nesses casos, preencha 'alerta' sinalizando que é rito de JEC e que o prazo deve ser confirmado com o responsável.
+
+0.3 Processos Físicos vs. Eletrônicos (Art. 229)
+
+A grande maioria dos processos é ELETRÔNICA — nestes NÃO se aplica o prazo em dobro do Art. 229, § 2º. Existem poucos processos FÍSICOS; somente nestes vale o prazo em dobro do Art. 229 (quando há litisconsortes com advogados de escritórios diferentes). A numeração do DJEN ajuda a identificar. Por padrão, assuma processo eletrônico; só aplique o dobro do 229 se houver indício claro de processo físico, e sinalize no 'alerta'.
 
 ────────────────────────────────────────────────────────────────────────────────
 
@@ -36,7 +55,7 @@ Embargos de Declaração INTERROMPEM o prazo do recurso principal — o relógio
 
 Quando há litisconsortes com advogados de escritórios diferentes, todos os prazos são dobrados automaticamente.
 
-⚠ NÃO se aplica em processos eletrônicos (Art. 229, § 2º). Confirmar com Henrique.
+NÃO se aplica em processos eletrônicos (Art. 229, § 2º) — confirmado: a maioria dos processos do escritório é eletrônica, sem dobro. Só aplicar o dobro em processos físicos (ver seção 0.3).
 
 1.5 Prazo Supletivo (Art. 218, § 3º)
 

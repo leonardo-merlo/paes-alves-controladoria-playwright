@@ -3,7 +3,10 @@ sistema_auth.py — Detecta autenticação por sistema e abre abas no Chrome via
 """
 
 import asyncio
-from playwright.async_api import async_playwright, Browser, Page
+import json
+import urllib.request
+import urllib.parse
+from typing import Callable, Awaitable
 
 CDP_URL = "http://localhost:9222"
 
@@ -14,108 +17,155 @@ SISTEMA_URLS = {
     "pje_tjmg_2inst": "https://pe.tjmg.jus.br/rupe/portaljus/intranet/principal.rupe",
     "pje_tjrj":       "https://tjrj.pje.jus.br/",
     "eproc_trf2":     "https://eproc.trf2.jus.br/",
-    "eproc_trf6":     "https://eproc1g.trf6.jus.br/eproc/",
+    "eproc_trf6":     "https://eproc1g.trf6.jus.br/eproc/",   # JFMG — 1ª instância federal
+    "eproc_trf6_2g":  "https://eproc2g.trf6.jus.br/eproc/",   # TRF6 — 2ª instância federal
 }
 
-# Fragmento de URL que indica sessão ativa (sem redirecionamento para login)
+# Host esperado na URL quando a sessão está ativa
 SISTEMA_HOST = {
     "pje_tjmg":       "pje.tjmg.jus.br",
     "eproc_tjmg":     "eproc1g.tjmg.jus.br",
     "pje_tjmg_2inst": "pe.tjmg.jus.br",
     "pje_tjrj":       "tjrj.pje.jus.br",
     "eproc_trf2":     "eproc.trf2.jus.br",
-    "eproc_trf6":     "eproc1g.trf6.jus.br",
+    "eproc_trf6":     "eproc1g.trf6.jus.br",    # JFMG — 1ª instância
+    "eproc_trf6_2g":  "eproc2g.trf6.jus.br",    # TRF6 — 2ª instância
 }
 
-# eProc redireciona para externo_controlador quando a sessão cai
+# Fragmentos de URL que indicam sessão encerrada ou tela de login
 INDICADORES_DESLOGADO = ["/login", "/Login", "login.seam", "token_invalid",
                          "sessao_expirada", "externo_controlador"]
 
 
-def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
-    """
-    Decide se uma aba está logada, a partir de sinais não-intrusivos (sem navegar).
-
-    Lógica pura e testável:
-      - precisa estar no host do sistema;
-      - a URL não pode conter indicador de deslogado;
-      - a página não pode exibir formulário de login (campo de senha).
-
-    O terceiro critério é o que corrige o falso-positivo: a landing de login de
-    alguns sistemas (ex.: RUPE) está no mesmo host e sem keyword de logout na URL,
-    mas ainda mostra o formulário de login.
-    """
-    host = SISTEMA_HOST.get(sistema, "")
-    if host not in url:
-        return False
-    if any(ind in url for ind in INDICADORES_DESLOGADO):
-        return False
-    if tem_form_login:
-        return False
-    return True
-
-
-async def _tem_form_login(page: Page) -> bool:
-    """True se houver campo de senha em qualquer frame da página (sem navegar)."""
-    for frame in page.frames:
-        try:
-            if await frame.evaluate("!!document.querySelector('input[type=password]')"):
-                return True
-        except Exception:
-            continue
-    return False
-
-
-async def _esta_logado(page: Page, sistema: str) -> bool:
-    tem_form = await _tem_form_login(page)
-    return _avaliar_login(page.url, sistema, tem_form)
+def _get_abas_chrome() -> list[dict]:
+    """Lista as abas abertas no Chrome via CDP HTTP — sem Playwright, sem Avast."""
+    try:
+        with urllib.request.urlopen(f"{CDP_URL}/json", timeout=2) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return []
 
 
 async def verificar_autenticacoes(sistemas: list[str]) -> dict[str, bool]:
     """
-    Conecta ao Chrome e verifica se cada sistema já tem sessão ativa.
-    Retorna {sistema: True/False}.
+    Verifica quais sistemas têm sessão ativa consultando as abas abertas no Chrome
+    via CDP HTTP (sem Playwright).
     """
     status: dict[str, bool] = {s: False for s in sistemas}
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(CDP_URL)
-            for ctx in browser.contexts:
-                for page in ctx.pages:
-                    for sistema in sistemas:
-                        if not status[sistema] and await _esta_logado(page, sistema):
-                            status[sistema] = True
-            await browser.close()
-    except Exception as e:
-        print(f"  Aviso: não foi possível conectar ao Chrome — {e}")
-
+    for aba in _get_abas_chrome():
+        url = aba.get("url", "")
+        for sistema in sistemas:
+            if not status[sistema]:
+                host = SISTEMA_HOST.get(sistema, "")
+                if host in url and not any(ind in url for ind in INDICADORES_DESLOGADO):
+                    status[sistema] = True
     return status
 
 
 async def abrir_abas_para_auth(sistemas_nao_autenticados: list[str]) -> None:
     """
-    Abre uma nova aba no Chrome para cada sistema que precisa de autenticação.
+    Abre uma aba no Chrome para cada sistema que precisa de login,
+    usando o endpoint CDP HTTP — sem Playwright.
+    Não abre se já existe uma aba para aquele sistema.
     """
     if not sistemas_nao_autenticados:
         return
+    abas_existentes = _get_abas_chrome()
+    for sistema in sistemas_nao_autenticados:
+        url = SISTEMA_URLS.get(sistema)
+        if not url:
+            continue
+        host = SISTEMA_HOST.get(sistema, "")
+        if any(host in aba.get("url", "") for aba in abas_existentes):
+            print(f"  Aba já aberta: {sistema}")
+            continue
+        try:
+            urllib.request.urlopen(f"{CDP_URL}/json/new?{url}", timeout=2).close()
+            print(f"  Aba aberta: {url}")
+        except Exception as e:
+            print(f"  Aviso: erro ao abrir aba {sistema} — {e}")
+            print(f"  Abra manualmente: {url}")
 
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(CDP_URL)
-            ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-            for sistema in sistemas_nao_autenticados:
-                url = SISTEMA_URLS.get(sistema)
-                if url:
-                    page = await ctx.new_page()
-                    await page.goto(url)
-                    print(f"  Aba aberta: {url}")
-            await browser.close()
-    except Exception as e:
-        print(f"  Aviso: erro ao abrir abas — {e}")
-        print("  Abra manualmente as URLs abaixo:")
-        for s in sistemas_nao_autenticados:
-            print(f"    {SISTEMA_URLS.get(s, s)}")
+
+async def monitorar_logins_e_processar(
+    sistemas: list[str],
+    ao_logar: Callable[[str], Awaitable[None]],
+    timeout_s: int = 600,
+    intervalo_s: int = 3,
+) -> set[str]:
+    """
+    Abre abas para os sistemas que precisam de login e fica monitorando.
+    Assim que cada sistema logar, dispara a extração dele imediatamente —
+    sem esperar os outros. Sistemas que não logarem dentro do timeout são
+    pulados e marcados para retentativa automática.
+    Retorna o conjunto de sistemas que foram processados.
+    """
+    loop = asyncio.get_running_loop()
+    inicio = loop.time()
+    processados: set[str] = set()
+    ja_avisados: set[str] = set()
+
+    print("\nVerificando autenticação nos sistemas...")
+    status = await verificar_autenticacoes(sistemas)
+    ja_logados = [s for s, ok in status.items() if ok]
+    nao_logados = [s for s, ok in status.items() if not ok]
+
+    if ja_logados:
+        print(f"  Sessão ativa: {', '.join(ja_logados)}")
+    if nao_logados:
+        print(f"  Necessita login: {', '.join(nao_logados)}")
+        await abrir_abas_para_auth(nao_logados)
+
+    print(f"\nA extração inicia em cada sistema assim que o login for detectado.")
+    print(f"Timeout por sistema: {timeout_s // 60} min.\n")
+
+    # se há sistemas com sessão ativa E sistemas aguardando login, dar uma janela
+    # para o usuário concluir os logins antes de processar qualquer sistema —
+    # evita processar um sistema com sessão aparentemente ativa que na verdade expirou
+    GRACA_S = 30
+    if ja_logados and nao_logados:
+        print(f"  Aguardando {GRACA_S}s para que você conclua os logins pendentes...")
+        await asyncio.sleep(GRACA_S)
+        status = await verificar_autenticacoes(sistemas)
+        ja_logados  = [s for s, ok in status.items() if ok]
+        nao_logados = [s for s, ok in status.items() if not ok]
+        if nao_logados:
+            await abrir_abas_para_auth(nao_logados)
+
+    for sistema in ja_logados:
+        ja_avisados.add(sistema)
+        processados.add(sistema)
+        await ao_logar(sistema)
+
+    # zera o relógio antes de esperar os sistemas pendentes: o tempo gasto
+    # extraindo os sistemas já logados acima não deve consumir a janela de
+    # login dos que ainda faltam (senão um sistema logado a tempo é pulado).
+    inicio = loop.time()
+
+    while len(processados) < len(sistemas):
+        if loop.time() - inicio > timeout_s:
+            restantes = [s for s in sistemas if s not in processados]
+            print(f"\nTimeout: {', '.join(restantes)} não respondeu — pulando.")
+            break
+
+        restantes = [s for s in sistemas if s not in processados]
+        status = await verificar_autenticacoes(restantes)
+
+        for sistema, ok in status.items():
+            if ok and sistema not in ja_avisados:
+                ja_avisados.add(sistema)
+                print(f"  ✓ Login detectado: {sistema}")
+            if ok and sistema not in processados:
+                processados.add(sistema)
+                await ao_logar(sistema)
+                # zerar o contador após cada extração — o usuário tem tempo cheio
+                # para logar no próximo sistema, independente de quanto demorou a extração anterior
+                inicio = loop.time()
+
+        if any(s not in processados for s in sistemas):
+            await asyncio.sleep(intervalo_s)
+
+    return processados
 
 
 async def aguardar_login_automatico(
@@ -123,12 +173,7 @@ async def aguardar_login_automatico(
     timeout_s: int = 600,
     intervalo_s: int = 3,
 ) -> bool:
-    """
-    Fica observando o Chrome e dispara sozinho quando TODOS os sistemas
-    necessários tiverem sessão ativa. Não pede Enter.
-
-    Retorna True quando todos logaram; False se estourar o timeout.
-    """
+    """Aguarda todos os sistemas logarem. Usado no modo manual (Enter)."""
     loop = asyncio.get_event_loop()
     inicio = loop.time()
     ja_avisados: set[str] = set()
@@ -139,7 +184,6 @@ async def aguardar_login_automatico(
     while True:
         status = await verificar_autenticacoes(sistemas)
 
-        # avisa cada sistema que acabou de logar, uma única vez
         for sistema, ok in status.items():
             if ok and sistema not in ja_avisados:
                 ja_avisados.add(sistema)
@@ -163,8 +207,7 @@ async def preparar_autenticacao(sistemas: list[str], modo_auto: bool = False) ->
 
     modo_auto=False → abre as abas faltantes e espera Enter (fluxo antigo).
     modo_auto=True  → não pede Enter; observa o Chrome e dispara sozinho
-                      assim que todos os sistemas logarem (as abas já foram
-                      abertas por iniciar.py).
+                      assim que todos os sistemas logarem.
     """
     print("\nVerificando autenticação nos sistemas...")
     status = await verificar_autenticacoes(sistemas)

@@ -465,6 +465,7 @@ async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> di
             "metadados_timeline":  metadados,
             "documentos":          documentos,
             "erros":               [d for d in documentos if d.get("erro")],
+            "incremental":         bool(data_corte),
         }
 
     except Exception as e:

@@ -6,6 +6,7 @@ Chamado pelo runner.py após a extração. Não rodar diretamente.
 
 import json
 import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -179,40 +180,47 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
     # verify=False necessário: antivírus/proxy local injeta certificado SSL não reconhecido pelo Python
     client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
 
-    try:
-        message = client.messages.create(
-            model=MODEL,
-            max_tokens=2048,
-            system=_build_system_msg(),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        resposta_texto = message.content[0].text.strip() if message.content else ""
+    MAX_TENTATIVAS = 3
+    resposta_texto = ""
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            message = client.messages.create(
+                model=MODEL,
+                max_tokens=2048,
+                system=_build_system_msg(),
+                messages=[{"role": "user", "content": prompt}],
+            )
+            resposta_texto = message.content[0].text.strip() if message.content else ""
 
-        # extrair JSON de bloco ```json...``` se presente (mesmo após texto)
-        import re as _re
-        bloco = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", resposta_texto, _re.DOTALL)
-        if bloco:
-            resposta_texto = bloco.group(1).strip()
-        elif not resposta_texto.startswith("{"):
-            # tentar a partir do primeiro {
-            inicio = resposta_texto.find("{")
-            if inicio != -1:
-                resposta_texto = resposta_texto[inicio:]
+            # extrair JSON de bloco ```json...``` se presente (mesmo após texto)
+            import re as _re
+            bloco = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", resposta_texto, _re.DOTALL)
+            if bloco:
+                resposta_texto = bloco.group(1).strip()
+            elif not resposta_texto.startswith("{"):
+                # tentar a partir do primeiro {
+                inicio = resposta_texto.find("{")
+                if inicio != -1:
+                    resposta_texto = resposta_texto[inicio:]
 
-        analise = json.loads(resposta_texto)
-        analise["numero_cnj"] = numero_cnj
-        analise["total_documentos_analisados"] = len(documentos)
-        analise["documentos_enviados_ao_modelo"] = min(len(documentos), MAX_DOCS_PARA_ANALISE)
-        analise["modelo"] = MODEL
+            analise = json.loads(resposta_texto)
+            analise["numero_cnj"] = numero_cnj
+            analise["total_documentos_analisados"] = len(documentos)
+            analise["documentos_enviados_ao_modelo"] = min(len(documentos), MAX_DOCS_PARA_ANALISE)
+            analise["modelo"] = MODEL
 
-        u = message.usage
-        custo_usd = (u.input_tokens / 1_000_000 * 3) + (u.output_tokens / 1_000_000 * 15)
-        print(f"[TOKENS] input: {u.input_tokens:,} | output: {u.output_tokens:,} | total: {u.input_tokens + u.output_tokens:,} | custo: USD {custo_usd:.4f} (~R$ {custo_usd*5.7:.2f})")
+            u = message.usage
+            custo_usd = (u.input_tokens / 1_000_000 * 3) + (u.output_tokens / 1_000_000 * 15)
+            print(f"[TOKENS] input: {u.input_tokens:,} | output: {u.output_tokens:,} | total: {u.input_tokens + u.output_tokens:,} | custo: USD {custo_usd:.4f} (~R$ {custo_usd*5.7:.2f})")
+            return analise
 
-    except json.JSONDecodeError as e:
-        return {"erro": f"JSON inválido: {e}", "resposta_bruta": resposta_texto[:500], "numero_cnj": numero_cnj}
-    except Exception as e:
-        import traceback
-        return {"erro": str(e), "traceback": traceback.format_exc(), "numero_cnj": numero_cnj}
-
-    return analise
+        except Exception as e:
+            # JSONDecodeError (resposta truncada/ruído) e erros de rede transitórios
+            # (ex.: WinError 10054 — reset de conexão pelo antivírus/proxy) são retentáveis.
+            if tentativa < MAX_TENTATIVAS:
+                print(f"  [análise] falha (tentativa {tentativa}/{MAX_TENTATIVAS}): {e} — retentando em 5s...")
+                time.sleep(5)
+                continue
+            import traceback
+            return {"erro": str(e), "traceback": traceback.format_exc(),
+                    "resposta_bruta": resposta_texto[:500], "numero_cnj": numero_cnj}

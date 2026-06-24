@@ -99,26 +99,45 @@ def _upsert_processo(client: Client, numero_cnj: str, resultado: dict, analise: 
     return res.data[0]["id"]
 
 
-def _upsert_documentos(client: Client, processo_id: str, documentos: list[dict]) -> None:
+def _clean_text(val: str | None) -> str | None:
+    """Remove null bytes que o PostgreSQL não aceita em colunas text."""
+    if val is None:
+        return None
+    return val.replace("\x00", "")
+
+
+def _upsert_documentos(client: Client, processo_id: str, documentos: list[dict], incremental: bool = False) -> None:
     """
     Insere ou atualiza os documentos extraídos no Supabase.
     """
     if not documentos:
         return
 
+    offset = 0
+    if incremental:
+        res = (
+            client.table("documentos")
+            .select("indice")
+            .eq("processo_id", processo_id)
+            .order("indice", desc=True)
+            .limit(1)
+            .execute()
+        )
+        offset = res.data[0]["indice"] if res.data else 0
+
     rows = []
     for doc in documentos:
         rows.append({
             "processo_id":      processo_id,
-            "indice":           doc.get("indice"),
-            "numero_documento": doc.get("numero_documento"),
-            "url_iframe":       doc.get("url_iframe"),
-            "texto":            (doc.get("texto") or "")[:50000],
-            "erro":             doc.get("erro"),
-            "titulo":           doc.get("titulo"),
-            "juntado_por":      doc.get("juntado_por"),
-            "cargo":            doc.get("cargo"),
-            "data_documento":   doc.get("data_documento"),
+            "indice":           doc.get("indice") + offset,
+            "numero_documento": _clean_text(doc.get("numero_documento")),
+            "url_iframe":       _clean_text(doc.get("url_iframe")),
+            "texto":            _clean_text((doc.get("texto") or ""))[:50000],
+            "erro":             _clean_text(doc.get("erro")),
+            "titulo":           _clean_text(doc.get("titulo")),
+            "juntado_por":      _clean_text(doc.get("juntado_por")),
+            "cargo":            _clean_text(doc.get("cargo")),
+            "data_documento":   _clean_text(doc.get("data_documento")),
             "data_extracao":    datetime.now(timezone.utc).isoformat(),
         })
 
@@ -188,7 +207,7 @@ def salvar_no_supabase(
         client = _get_client()
 
         processo_id = _upsert_processo(client, numero_cnj, resultado_extracao, analise)
-        _upsert_documentos(client, processo_id, resultado_extracao.get("documentos", []))
+        _upsert_documentos(client, processo_id, resultado_extracao.get("documentos", []), incremental=resultado_extracao.get("incremental", False))
         _upsert_rascunho(client, processo_id, analise)
 
         return {"ok": True, "processo_id": processo_id}

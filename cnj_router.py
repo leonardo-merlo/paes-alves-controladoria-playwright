@@ -33,10 +33,11 @@ URLS = {
     "pje_tjmg_2inst":  "https://pe.tjmg.jus.br/rupe/portaljus/intranet/principal.rupe",
     "pje_tjrj":        "https://tjrj.pje.jus.br/",
     "eproc_trf2":      "https://eproc.trf2.jus.br/",
-    "eproc_trf6":      "https://eproc1g.trf6.jus.br/eproc/",
+    "eproc_trf6":      "https://eproc1g.trf6.jus.br/eproc/",   # JFMG — 1ª instância federal
+    "eproc_trf6_2g":   "https://eproc2g.trf6.jus.br/eproc/",   # TRF6 — 2ª instância federal
 }
 
-IMPLEMENTADOS = {"pje_tjmg", "eproc_tjmg", "eproc_trf6", "pje_tjmg_2inst"}
+IMPLEMENTADOS = {"pje_tjmg", "eproc_tjmg", "eproc_trf6", "eproc_trf6_2g", "pje_tjmg_2inst"}
 
 
 @dataclass
@@ -54,7 +55,7 @@ class CNJInfo:
     erro: str | None = None
 
 
-def rotear(numero_cnj: str) -> CNJInfo:
+def rotear(numero_cnj: str, sistema_hint: str | None = None) -> CNJInfo:
     numero_cnj = numero_cnj.strip()
     m = CNJ_PATTERN.match(numero_cnj)
     if not m:
@@ -81,6 +82,10 @@ def rotear(numero_cnj: str) -> CNJInfo:
         else:
             sistema_base = "eproc_tjmg" if sequencial.startswith("1") else "pje_tjmg"
 
+    # TRF6: origem 0000 = TRF6 2ª instância (eproc2g) | demais = JFMG 1ª instância (eproc1g)
+    if chave == ("4", "06"):
+        sistema_base = "eproc_trf6_2g" if origem == "0000" else "eproc_trf6"
+
     if not sistema_base:
         sistema = f"nao_mapeado_J{j}_TT{tt}"
         url = ""
@@ -89,6 +94,14 @@ def rotear(numero_cnj: str) -> CNJInfo:
         sistema = sistema_base
         url = URLS.get(sistema, "")
         implementado = sistema in IMPLEMENTADOS
+
+    # Override explícito vindo do banco (coluna `sistema`): força um sistema
+    # quando o CNJ sozinho não revela a instância — ex.: recurso em Câmara Cível
+    # (origem != 0000) que tramita na 2ª instância (RUPE / pje_tjmg_2inst).
+    if sistema_hint and sistema_hint in IMPLEMENTADOS:
+        sistema = sistema_hint
+        url = URLS.get(sistema, "")
+        implementado = True
 
     return CNJInfo(
         numero_cnj=numero_cnj,
@@ -104,7 +117,8 @@ def rotear(numero_cnj: str) -> CNJInfo:
     )
 
 
-def rotear_lista(numeros: list[str]) -> list[CNJInfo]:
+def rotear_lista(numeros: list[str], hints: dict[str, str] | None = None) -> list[CNJInfo]:
+    hints = hints or {}
     vistos: set[str] = set()
     resultado = []
     for n in numeros:
@@ -114,5 +128,5 @@ def rotear_lista(numeros: list[str]) -> list[CNJInfo]:
         if n in vistos:
             continue  # duplicata ignorada
         vistos.add(n)
-        resultado.append(rotear(n))
+        resultado.append(rotear(n, hints.get(n)))
     return resultado

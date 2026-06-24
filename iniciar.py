@@ -12,10 +12,9 @@ Uso:
 import asyncio
 import subprocess
 import sys
+import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-from playwright.async_api import async_playwright
 
 from cnj_router import rotear
 from runner import modo_supabase
@@ -33,7 +32,7 @@ def _coletar_urls_pendentes() -> list[str]:
     client = _get_client()
     res = (
         client.table("processos")
-        .select("numero_cnj")
+        .select("numero_cnj, sistema")
         .in_("pje_status", ["pendente", "erro_browser", "captcha_bloqueado"])
         .eq("duplicata", False)
         .execute()
@@ -42,7 +41,7 @@ def _coletar_urls_pendentes() -> list[str]:
 
     urls_por_sistema: dict[str, str] = {}
     for row in pendentes:
-        info = rotear(row["numero_cnj"])
+        info = rotear(row["numero_cnj"], row.get("sistema"))
         if info.url:
             urls_por_sistema[info.sistema] = info.url
 
@@ -56,18 +55,16 @@ def _coletar_urls_pendentes() -> list[str]:
 
 async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -> bool:
     """Espera o Chrome subir e aceitar conexão CDP antes de prosseguir."""
-    async with async_playwright() as p:
-        for _ in range(tentativas):
-            try:
-                browser = await p.chromium.connect_over_cdp(CDP_URL)
-                await browser.close()
-                return True
-            except Exception:
-                await asyncio.sleep(intervalo_s)
+    for _ in range(tentativas):
+        try:
+            urllib.request.urlopen(f"{CDP_URL}/json", timeout=1).close()
+            return True
+        except Exception:
+            await asyncio.sleep(intervalo_s)
     return False
 
 
-async def main() -> dict:
+async def main(progresso_cb=None) -> dict:
     urls = _coletar_urls_pendentes()
     if not urls:
         print("Nenhum processo pendente. Nada a fazer.")
@@ -86,7 +83,7 @@ async def main() -> dict:
         return {"total": 0, "processados": 0, "erros": 0, "cdp_falhou": True}
 
     # modo_auto=True: observa o login e dispara a extração sozinho.
-    return await modo_supabase(modo_auto=True)
+    return await modo_supabase(modo_auto=True, progresso_cb=progresso_cb)
 
 
 if __name__ == "__main__":
