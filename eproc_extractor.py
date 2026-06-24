@@ -123,8 +123,17 @@ async def verificar_sessao(page: Page) -> bool:
 
 async def pesquisar_processo(page: Page, numero_cnj: str, base: str) -> None:
     campo = SELECTORS["campo_busca"]
-    tem_campo = await page.evaluate(f"!!document.querySelector('{campo}')")
-    if not tem_campo:
+    # checar visibilidade, não apenas existência: após exibir um documento o campo
+    # permanece no DOM mas fica oculto — fill falha com "element is not visible"
+    campo_visivel = await page.evaluate(f"""
+        (() => {{
+            const el = document.querySelector('{campo}');
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        }})()
+    """)
+    if not campo_visivel:
         # aceitar automaticamente o alert "Usuário logado como..." que o eProc exibe
         page.once("dialog", lambda d: asyncio.ensure_future(d.accept()))
         await page.goto(base + "controlador.php?acao=principal", wait_until="domcontentloaded")
