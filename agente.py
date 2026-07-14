@@ -14,12 +14,17 @@ Uso:
 import asyncio
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from iniciar import main as executar_extracao
 from supabase_writer import _get_client, _carregar_env
 
 INTERVALO_S = 3
+
+# Uma rodada de extração leva 20-45min. Um comando 'em_andamento' mais antigo
+# que isto é tratado como rodada abandonada (agente caiu no meio) e deixa de
+# bloquear novas rodadas — senão a fila travaria pra sempre após um crash.
+LIMITE_RODADA_ABANDONADA_MIN = 90
 
 
 def proximo_pendente(comandos: list[dict]) -> dict | None:
@@ -51,15 +56,57 @@ def marcar(client, comando_id: str, status: str, mensagem: str | None = None) ->
     client.table("comandos").update(update).eq("id", comando_id).execute()
 
 
+def ha_rodada_em_andamento(client) -> bool:
+    """Camada (b) — exclusão mútua global: True se já existe uma extração em
+    curso (outro agente rodando). Ignora rodadas abandonadas (ver constante)."""
+    limite = (
+        datetime.now(timezone.utc) - timedelta(minutes=LIMITE_RODADA_ABANDONADA_MIN)
+    ).isoformat()
+    res = (
+        client.table("comandos")
+        .select("id")
+        .eq("status", "em_andamento")
+        .gte("atualizado_em", limite)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
+def reivindicar(client, comando_id: str, mensagem: str) -> bool:
+    """Camada (a) — claim atômico: marca 'em_andamento' SOMENTE se o comando
+    ainda estiver 'pendente', numa única operação. Retorna True apenas se ESTE
+    agente foi quem o pegou (se outro pegou antes, o update afeta 0 linhas)."""
+    res = (
+        client.table("comandos")
+        .update({
+            "status": "em_andamento",
+            "mensagem": mensagem,
+            "atualizado_em": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("id", comando_id)
+        .eq("status", "pendente")
+        .execute()
+    )
+    return len(res.data or []) == 1
+
+
 def processar_um(client) -> bool:
     """Pega e executa um comando pendente. Retorna True se executou algo."""
+    # Camada (b): não inicia uma rodada se outra já estiver em andamento.
+    if ha_rodada_em_andamento(client):
+        return False
+
     comando = proximo_pendente(buscar_pendentes(client))
     if not comando:
         return False
 
     cid = comando["id"]
+    # Camada (a): só segue se conseguir reivindicar o comando atomicamente.
+    if not reivindicar(client, cid, "Abrindo navegador. Faça login nos sistemas."):
+        return False
+
     print(f"Comando recebido: {comando.get('acao')} ({cid[:8]})")
-    marcar(client, cid, "em_andamento", "Abrindo navegador. Faça login nos sistemas.")
     try:
         resumo = asyncio.run(executar_extracao()) or {}
         status, mensagem = _resumo_para_status(resumo)
