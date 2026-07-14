@@ -53,11 +53,11 @@ SELECTORS = {
 }
 
 
-def _resolver_sistema(numero_cnj: str) -> tuple[str, str, str]:
+def _resolver_sistema(numero_cnj: str, sistema_hint: str | None = None) -> tuple[str, str, str]:
     """Resolve (sistema, host, base) a partir do CNJ. Default: eProc TJMG."""
     try:
         from cnj_router import rotear
-        sistema = rotear(numero_cnj).sistema
+        sistema = rotear(numero_cnj, sistema_hint).sistema
     except Exception:
         sistema = _DEFAULT_SISTEMA
     cfg = SISTEMAS_EPROC.get(sistema) or SISTEMAS_EPROC[_DEFAULT_SISTEMA]
@@ -123,16 +123,19 @@ async def verificar_sessao(page: Page) -> bool:
 
 async def pesquisar_processo(page: Page, numero_cnj: str, base: str) -> None:
     campo = SELECTORS["campo_busca"]
-    # checar visibilidade, não apenas existência: após exibir um documento o campo
-    # permanece no DOM mas fica oculto — fill falha com "element is not visible"
-    campo_visivel = await page.evaluate(f"""
-        (() => {{
-            const el = document.querySelector('{campo}');
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        }})()
-    """)
+    # Verificar visibilidade — após extração o campo existe no DOM mas fica oculto
+    # na página de detalhe do processo. Só fill() em elemento visível funciona.
+    # Se a página estiver em navegação o evaluate lança "Execution context was destroyed"
+    # — nesse caso tratar como não visível e navegar ao painel principal.
+    try:
+        campo_visivel = await page.evaluate(
+            f"(() => {{ const el = document.querySelector('{campo}');"
+            f" if (!el) return false;"
+            f" const r = el.getBoundingClientRect();"
+            f" return r.width > 0 && r.height > 0; }})()"
+        )
+    except Exception:
+        campo_visivel = False
     if not campo_visivel:
         # aceitar automaticamente o alert "Usuário logado como..." que o eProc exibe
         page.once("dialog", lambda d: asyncio.ensure_future(d.accept()))
@@ -394,11 +397,11 @@ async def extrair_documentos(page: Page, eventos: list[dict], base: str, data_co
     return documentos
 
 
-async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> dict:
+async def extrair_processo(numero_cnj: str, data_corte: str | None = None, sistema_hint: str | None = None) -> dict:
     playwright: Optional[Playwright] = None
     browser: Optional[Browser] = None
 
-    sistema, host, base = _resolver_sistema(numero_cnj)
+    sistema, host, base = _resolver_sistema(numero_cnj, sistema_hint)
     rotulo = "eProc TJMG" if sistema == "eproc_tjmg" else "eProc TRF6"
 
     try:

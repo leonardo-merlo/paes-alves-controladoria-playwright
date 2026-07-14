@@ -73,18 +73,16 @@ def rotear(numero_cnj: str, sistema_hint: str | None = None) -> CNJInfo:
     chave = (j, tt)
     sistema_base = SISTEMAS.get(chave)
 
-    # TJMG: PJE, eProc e RUPE compartilham o mesmo segmento .8.13.
-    # origem 0000 = tribunal/2ª instância (RUPE). Caso contrário, o primeiro
-    # dígito do sequencial define o sistema: 1xxxxxx → eProc | demais → PJE.
-    if chave == ("8", "13"):
-        if origem == "0000":
-            sistema_base = "pje_tjmg_2inst"
-        else:
-            sistema_base = "eproc_tjmg" if sequencial.startswith("1") else "pje_tjmg"
-
-    # TRF6: origem 0000 = TRF6 2ª instância (eproc2g) | demais = JFMG 1ª instância (eproc1g)
-    if chave == ("4", "06"):
-        sistema_base = "eproc_trf6_2g" if origem == "0000" else "eproc_trf6"
+    # TJMG e TRF6 (1ª instância): o 1º dígito do sequencial já identifica o
+    # sistema, sem depender de TT/origem — mesma regra usada pela skill do
+    # Gmail. Dígito fora da tabela = sistema não identificado (não adivinha).
+    DIGITO_SISTEMA = {"1": "eproc_tjmg", "5": "pje_tjmg", "6": "eproc_trf6"}
+    if chave == ("8", "13") and origem == "0000":
+        # origem 0000 é 2ª instância (RUPE) independente do dígito — o
+        # sequencial da 2ª instância não segue a convenção 1/5/6 da 1ª.
+        sistema_base = "pje_tjmg_2inst"
+    elif chave in (("8", "13"), ("4", "06")):
+        sistema_base = DIGITO_SISTEMA.get(sequencial[0])
 
     if not sistema_base:
         sistema = f"nao_mapeado_J{j}_TT{tt}"
@@ -95,11 +93,21 @@ def rotear(numero_cnj: str, sistema_hint: str | None = None) -> CNJInfo:
         url = URLS.get(sistema, "")
         implementado = sistema in IMPLEMENTADOS
 
-    # Override explícito vindo do banco (coluna `sistema`): força um sistema
-    # quando o CNJ sozinho não revela a instância — ex.: recurso em Câmara Cível
-    # (origem != 0000) que tramita na 2ª instância (RUPE / pje_tjmg_2inst).
-    if sistema_hint and sistema_hint in IMPLEMENTADOS:
-        sistema = sistema_hint
+    # Override explícito vindo do banco (coluna `sistema`): a skill do Gmail
+    # deriva isso do texto da Vara — ausência da palavra "vara" = 2ª instância
+    # (pje_2g) — sinal que o CNJ sozinho não tem como revelar, então SEMPRE vence.
+    # Hints fracos ('pje', 'eproc') são o default genérico da skill quando ela
+    # não tem certeza do 1º dígito e não devem sobrepor a tabela de dígito acima.
+    _ALIAS = {"pje": "pje_tjmg", "pje_2g": "pje_tjmg_2inst", "eproc": "eproc_tjmg"}
+    _ALIAS_FRACOS = {"pje", "eproc"}
+    hint_norm = _ALIAS.get(sistema_hint, sistema_hint) if sistema_hint else None
+    eh_digito_deterministico = (
+        chave in (("8", "13"), ("4", "06"))
+        and sistema_base is not None
+        and sistema_hint in _ALIAS_FRACOS
+    )
+    if hint_norm and hint_norm in IMPLEMENTADOS and not eh_digito_deterministico:
+        sistema = hint_norm
         url = URLS.get(sistema, "")
         implementado = True
 

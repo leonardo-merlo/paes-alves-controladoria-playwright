@@ -64,7 +64,7 @@ async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -
     return False
 
 
-async def main(progresso_cb=None) -> dict:
+async def main() -> dict:
     urls = _coletar_urls_pendentes()
     if not urls:
         print("Nenhum processo pendente. Nada a fazer.")
@@ -83,7 +83,7 @@ async def main(progresso_cb=None) -> dict:
         return {"total": 0, "processados": 0, "erros": 0, "cdp_falhou": True}
 
     # modo_auto=True: observa o login e dispara a extração sozinho.
-    return await modo_supabase(modo_auto=True, progresso_cb=progresso_cb)
+    return await modo_supabase(modo_auto=True)
 
 
 if __name__ == "__main__":

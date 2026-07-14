@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS public.processos (
   motivo_ignorado       text,
   data_entrada          timestamptz DEFAULT now(),
   lote_id               text,
+  numero_publicacao     text,
   CONSTRAINT processos_pkey PRIMARY KEY (id),
   CONSTRAINT processos_numero_cnj_key UNIQUE (numero_cnj),
   CONSTRAINT processos_email_id_fkey FOREIGN KEY (email_id) REFERENCES public.emails_recebidos (id),

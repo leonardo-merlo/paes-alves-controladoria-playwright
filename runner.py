@@ -161,7 +161,10 @@ async def processar_cnj(
         else:
             print(f"{prefixo} — extraindo (todos os documentos){sufixo}...")
 
-        resultado = await extrator(info.numero_cnj, data_corte=data_corte)
+        try:
+            resultado = await extrator(info.numero_cnj, data_corte=data_corte, sistema_hint=info.sistema)
+        except Exception as e:
+            resultado = {"erro": str(e), "numero_cnj": info.numero_cnj}
 
         if resultado.get("erro"):
             erro_msg = resultado["erro"]
@@ -192,17 +195,17 @@ async def processar_cnj(
     analise = analisar_processo(info.numero_cnj, resultado)
 
     if analise.get("erro"):
-        # análise falhou mesmo após retries — não grava rascunho vazio nem marca
-        # 'processado'; retorna erro para o CNJ cair em erro_browser e reprocessar.
-        print(f"{prefixo} — ERRO análise: {analise['erro']} — marcando p/ reprocessar")
-        return {"erro": "analise_falhou", "numero_cnj": info.numero_cnj}
+        # análise falhou (ex: sem créditos API) — salva os documentos mesmo assim
+        print(f"{prefixo} — AVISO análise: {analise['erro']} — salvando documentos sem análise")
+        analise = {}  # rascunho vazio; pje_status ficará 'processado' sem análise
 
-    status    = analise.get("status_sugerido", "?")
-    resp      = analise.get("responsavel_sugerido", "?")
-    prazo     = analise.get("prazo_fatal_dias_uteis")
-    risco     = analise.get("classificacao_risco", "?")
-    prazo_str = f"{prazo} d.u." if prazo else "sem prazo"
-    print(f"{prefixo} — {status} | {resp} | {prazo_str} | {risco}")
+    if not analise.get("erro"):
+        status    = analise.get("status_sugerido", "?")
+        resp      = analise.get("responsavel_sugerido", "?")
+        prazo     = analise.get("prazo_fatal_dias_uteis")
+        risco     = analise.get("classificacao_risco", "?")
+        prazo_str = f"{prazo} d.u." if prazo else "sem prazo"
+        print(f"{prefixo} — {status} | {resp} | {prazo_str} | {risco}")
 
     n_docs = len(resultado.get("documentos") or [])
     print(f"{prefixo} — salvando {n_docs} doc(s) no Supabase...")
@@ -225,7 +228,6 @@ async def processar_por_sistema(
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
     modo_auto: bool = False,
-    progresso_cb=None,
 ) -> tuple[list[str], list[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
@@ -268,11 +270,8 @@ async def processar_por_sistema(
     sistemas_necessarios = list(por_sistema.keys())
     ids_ok: list[str] = []
     ids_erro: list[str] = []
-    total_global = sum(len(v) for v in por_sistema.values())
-    processados_global = 0
 
     async def _processar_sistema(sistema: str) -> None:
-        nonlocal processados_global
         infos = por_sistema[sistema]
         total = len(infos)
         print(f"{'='*50}")
@@ -286,9 +285,7 @@ async def processar_por_sistema(
                 ids_ok.append(cnj_id)
             elif cnj_id:
                 ids_erro.append(cnj_id)
-            processados_global += 1
-            if progresso_cb:
-                progresso_cb(processados_global, total_global)
+                marcar_supabase([cnj_id], "erro_browser", "Erro durante processamento")
         print()
 
     if modo_auto:
@@ -319,7 +316,7 @@ async def processar_por_sistema(
 
 # ── modos de execução ─────────────────────────────────────────────
 
-async def modo_supabase(modo_auto: bool = False, progresso_cb=None) -> dict:
+async def modo_supabase(modo_auto: bool = False) -> dict:
     """Processa os pendentes do Supabase. Retorna resumo {total, processados, erros}."""
     pendentes = ler_cnjs_supabase()
     if not pendentes:
@@ -334,7 +331,7 @@ async def modo_supabase(modo_auto: bool = False, progresso_cb=None) -> dict:
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro = await processar_por_sistema(cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto, progresso_cb=progresso_cb)
+    ids_ok, ids_erro = await processar_por_sistema(cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto)
     print(f"ids_ok={ids_ok}")
     print(f"ids_erro={ids_erro}")
     marcar_supabase(ids_ok, "processado")

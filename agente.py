@@ -16,8 +16,6 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-INTERVALO_HEARTBEAT_S = 60  # imprime "aguardando" a cada 60s quando ocioso
-
 from iniciar import main as executar_extracao
 from supabase_writer import _get_client, _carregar_env
 
@@ -60,23 +58,16 @@ def processar_um(client) -> bool:
         return False
 
     cid = comando["id"]
-    ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts}] Comando recebido: {comando.get('acao')} ({cid[:8]})")
+    print(f"Comando recebido: {comando.get('acao')} ({cid[:8]})")
     marcar(client, cid, "em_andamento", "Abrindo navegador. Faça login nos sistemas.")
-
-    def _progresso(atual: int, total: int) -> None:
-        marcar(client, cid, "em_andamento", f"{atual}/{total} extraídos")
-
     try:
-        resumo = asyncio.run(executar_extracao(progresso_cb=_progresso)) or {}
+        resumo = asyncio.run(executar_extracao()) or {}
         status, mensagem = _resumo_para_status(resumo)
         marcar(client, cid, status, mensagem)
-        ts = datetime.now().strftime("%H:%M:%S")
-        print(f"[{ts}] Comando {status}: {mensagem}")
+        print(f"Comando {status}: {mensagem}")
     except Exception as e:  # noqa: BLE001 — agente não pode morrer por um comando
         marcar(client, cid, "erro", f"Erro: {e}")
-        ts = datetime.now().strftime("%H:%M:%S")
-        print(f"[{ts}] Erro ao executar comando: {e}")
+        print(f"Erro ao executar comando: {e}")
         traceback.print_exc()
     return True
 
@@ -101,21 +92,12 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
 def main_loop() -> None:
     _carregar_env()
     client = _get_client()
-    agora = datetime.now().strftime("%H:%M:%S")
-    print(f"[{agora}] Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
-    ultimo_heartbeat = time.time()
+    print("Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
     while True:
         try:
-            executou = processar_um(client)
-            if not executou:
-                agora_s = time.time()
-                if agora_s - ultimo_heartbeat >= INTERVALO_HEARTBEAT_S:
-                    ts = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts}] Aguardando comandos...")
-                    ultimo_heartbeat = agora_s
+            processar_um(client)
         except Exception as e:  # noqa: BLE001 — loop nunca para por erro de rede
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts}] Erro no loop do agente: {e}")
+            print(f"Erro no loop do agente: {e}")
         time.sleep(INTERVALO_S)
 
 

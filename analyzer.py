@@ -25,7 +25,7 @@ if _env_file.exists():
             os.environ[_k.strip()] = _v.strip()
 
 CPC_DIR = Path("cpc")
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-haiku-4-5-20251001"
 MAX_DOCS_PARA_ANALISE = 7  # documentos mais recentes enviados ao modelo (texto completo)
 
 def _carregar_arquivo_cpc(nome: str) -> str:
@@ -210,7 +210,7 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
             analise["modelo"] = MODEL
 
             u = message.usage
-            custo_usd = (u.input_tokens / 1_000_000 * 3) + (u.output_tokens / 1_000_000 * 15)
+            custo_usd = (u.input_tokens / 1_000_000 * 1) + (u.output_tokens / 1_000_000 * 5)
             print(f"[TOKENS] input: {u.input_tokens:,} | output: {u.output_tokens:,} | total: {u.input_tokens + u.output_tokens:,} | custo: USD {custo_usd:.4f} (~R$ {custo_usd*5.7:.2f})")
             return analise
 

@@ -208,7 +208,8 @@ def salvar_no_supabase(
 
         processo_id = _upsert_processo(client, numero_cnj, resultado_extracao, analise)
         _upsert_documentos(client, processo_id, resultado_extracao.get("documentos", []), incremental=resultado_extracao.get("incremental", False))
-        _upsert_rascunho(client, processo_id, analise)
+        if analise:
+            _upsert_rascunho(client, processo_id, analise)
 
         return {"ok": True, "processo_id": processo_id}
 

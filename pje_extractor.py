@@ -435,7 +435,7 @@ async def extrair_todos_documentos(page: Page, data_corte: str | None = None) ->
     return documentos
 
 
-async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> dict:
+async def extrair_processo(numero_cnj: str, data_corte: str | None = None, sistema_hint: str | None = None) -> dict:
     playwright: Optional[Playwright] = None
     browser: Optional[Browser] = None
 

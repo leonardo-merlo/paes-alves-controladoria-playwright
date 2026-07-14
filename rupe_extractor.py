@@ -332,7 +332,7 @@ async def extrair_documentos(
     return documentos
 
 
-async def extrair_processo(numero_cnj: str, data_corte: str | None = None) -> dict:
+async def extrair_processo(numero_cnj: str, data_corte: str | None = None, sistema_hint: str | None = None) -> dict:
     playwright: Optional[Playwright] = None
     browser: Optional[Browser] = None
     viewer: Optional[Page] = None
