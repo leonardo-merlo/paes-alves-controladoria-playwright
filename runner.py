@@ -57,6 +57,31 @@ def ler_cnjs_supabase() -> list[dict]:
     return res.data or []
 
 
+def ids_com_documentos(ids: list[str]) -> set[str]:
+    """
+    Quais desses processos já têm documento salvo.
+    Serve de trava para a extração incremental: se a gravação anterior falhou no
+    meio (data_ultima_consulta gravada, documentos não), extrair a partir da data
+    de corte devolveria 0 documentos e o processo passaria por "nada novo" —
+    ficando 'processado' sem nenhum documento no banco.
+    """
+    if not ids:
+        return set()
+    _carregar_env()
+    client = _get_client()
+    encontrados: set[str] = set()
+    # in_() com lista grande estoura o tamanho da URL — vai em lotes.
+    for i in range(0, len(ids), 50):
+        res = (
+            client.table("documentos")
+            .select("processo_id")
+            .in_("processo_id", ids[i:i + 50])
+            .execute()
+        )
+        encontrados.update(r["processo_id"] for r in (res.data or []))
+    return encontrados
+
+
 def marcar_supabase(ids: list[str], status: str, motivo: str | None = None) -> None:
     if not ids:
         return
@@ -70,6 +95,24 @@ def marcar_supabase(ids: list[str], status: str, motivo: str | None = None) -> N
         # motivo da falha anterior — o painel passa a mentir sobre o estado atual.
         update["motivo_ignorado"] = None
     client.table("processos").update(update).in_("id", ids).execute()
+
+
+def eh_nada_novo(total_documentos: int, data_corte: str | None) -> bool:
+    """
+    0 documentos numa extração incremental = nada mudou desde a última consulta.
+    É o desfecho normal de um processo já extraído que voltou à fila numa pauta
+    nova. Tratar isso como erro apagava do painel um processo que já estava
+    pronto, com documentos e rascunho salvos.
+    Na primeira extração (sem corte) 0 documentos continua sendo falha de verdade.
+    """
+    return total_documentos == 0 and bool(data_corte)
+
+
+def eh_queda_de_sessao(resultado: dict | None) -> bool:
+    """A sessão do sistema morreu — todo CNJ seguinte da fila vai falhar igual."""
+    if not resultado:
+        return False
+    return "sessao_expirada" in str(resultado.get("erro") or "")
 
 
 def motivo_do_erro(resultado: dict | None) -> str:
@@ -201,11 +244,17 @@ async def processar_cnj(
         if total > 0:
             break
 
+        if eh_nada_novo(total, data_corte):
+            break  # retentar não traz documento que não existe
+
         if tentativa < MAX_TENTATIVAS:
             print(f"{prefixo} — 0 documentos, retentando em 5s...")
             await asyncio.sleep(5)
 
     if resultado.get("total_documentos", 0) == 0:
+        if eh_nada_novo(0, data_corte):
+            print(f"{prefixo} — nada novo desde {data_corte[:10]} — segue processado")
+            return {"nada_novo": True, "numero_cnj": info.numero_cnj}
         print(f"{prefixo} — ERRO: nenhum documento após {MAX_TENTATIVAS} tentativa(s)")
         return {"erro": "sem_documentos", "numero_cnj": info.numero_cnj}
 
@@ -254,11 +303,13 @@ async def processar_por_sistema(
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
     modo_auto: bool = False,
-) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+) -> tuple[list[str], list[str], list[tuple[str, str]], list[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
-    Retorna (ids_ok, ids_erro, ids_revisao) para atualizar o Supabase.
-    `ids_revisao` são processos salvos porém sem análise — precisam de aviso.
+    Retorna (ids_ok, ids_erro, ids_revisao, ids_nada_novo) para atualizar o Supabase.
+    `ids_revisao`   são processos salvos porém sem análise — precisam de aviso.
+    `ids_nada_novo` já estavam extraídos e não tinham documento novo — continuam
+    processados, mas não devem ser contados como extração desta rodada.
     """
 
     # separar por sistema
@@ -292,12 +343,13 @@ async def processar_por_sistema(
 
     if not por_sistema:
         print("Nenhum CNJ para processar.")
-        return [], [], []
+        return [], [], [], []
 
     sistemas_necessarios = list(por_sistema.keys())
     ids_ok: list[str] = []
     ids_erro: list[str] = []
     ids_revisao: list[tuple[str, str]] = []
+    ids_nada_novo: list[str] = []
 
     async def _processar_sistema(sistema: str) -> None:
         infos = por_sistema[sistema]
@@ -309,8 +361,24 @@ async def processar_por_sistema(
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
+
+            if eh_queda_de_sessao(resultado):
+                # seguir a fila só queima os CNJs restantes contra um sistema
+                # deslogado — em 29/07 foram 37 assim, em 1h40. O que não chegou
+                # a ser tentado volta para 'pendente': não é erro, é fila.
+                restantes = [ids_map[o.numero_cnj] for o in infos[i - 1:]
+                             if ids_map and o.numero_cnj in ids_map]
+                print(f"  [{sistema}] sessão caiu — {len(restantes)} CNJ(s) devolvidos à fila")
+                marcar_supabase(
+                    restantes, "pendente",
+                    "Sessão caiu durante a rodada — refazer login e rodar de novo",
+                )
+                break
+
             if resultado and not resultado.get("erro") and cnj_id:
                 ids_ok.append(cnj_id)
+                if resultado.get("nada_novo"):
+                    ids_nada_novo.append(cnj_id)
                 if resultado.get("revisao_manual"):
                     ids_revisao.append((cnj_id, resultado["revisao_manual"]))
             elif cnj_id:
@@ -328,11 +396,16 @@ async def processar_por_sistema(
                 for info in por_sistema.get(s, [])
                 if info.numero_cnj in ids_map
             ]
-            marcar_supabase(ids_timeout, "erro_browser", "Sistema indisponível ou timeout de login")
+            # login não concluído = ninguém tentou extrair. Marcar erro aqui fazia
+            # o painel acusar falha em processo que nunca foi aberto.
+            marcar_supabase(
+                ids_timeout, "pendente",
+                "Login não concluído dentro do tempo — não chegou a ser tentado",
+            )
     else:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
         if not ok:
-            return [], [], []
+            return [], [], [], []
         for sistema in sistemas_necessarios:
             await _processar_sistema(sistema)
 
@@ -341,7 +414,7 @@ async def processar_por_sistema(
         ids_nao_impl = [ids_map[i.numero_cnj] for i in nao_impl if i.numero_cnj in ids_map]
         marcar_supabase(ids_nao_impl, "ignorado", "Sistema não implementado")
 
-    return ids_ok, ids_erro, ids_revisao
+    return ids_ok, ids_erro, ids_revisao, ids_nada_novo
 
 
 # ── modos de execução ─────────────────────────────────────────────
@@ -355,13 +428,18 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
 
     numeros = [p["numero_cnj"] for p in pendentes]
     ids_map = {p["numero_cnj"]: p["id"] for p in pendentes}
-    corte_map = {p["numero_cnj"]: p.get("data_ultima_consulta") for p in pendentes}
+    # só extrai incremental quem realmente tem os documentos anteriores salvos
+    com_docs = ids_com_documentos([p["id"] for p in pendentes])
+    corte_map = {
+        p["numero_cnj"]: (p.get("data_ultima_consulta") if p["id"] in com_docs else None)
+        for p in pendentes
+    }
     hints = {p["numero_cnj"]: p.get("sistema") for p in pendentes}
     cnjs = rotear_lista(numeros, hints)
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro, ids_revisao = await processar_por_sistema(
+    ids_ok, ids_erro, ids_revisao, ids_nada_novo = await processar_por_sistema(
         cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto
     )
     print(f"ids_ok={ids_ok}")
@@ -373,10 +451,14 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
         marcar_supabase([cnj_id], "processado", motivo)
     # os ids com erro já foram marcados um a um, com o motivo real, dentro de
     # _processar_sistema — remarcar em bloco aqui sobrescreveria esse detalhe.
+    # "extraído" e "nada novo" contam como sucesso, mas dizer que 12 foram
+    # processados quando 9 só foram reconferidos confunde quem lê o painel.
+    extraidos = len(ids_ok) - len(ids_nada_novo)
     aviso = f", {len(ids_revisao)} sem análise (revisão manual)" if ids_revisao else ""
-    print(f"Concluído: {len(ids_ok)} processados, {len(ids_erro)} com erro{aviso}")
-    return {"total": len(cnjs), "processados": len(ids_ok), "erros": len(ids_erro),
-            "revisao_manual": len(ids_revisao)}
+    sem_novidade = f", {len(ids_nada_novo)} sem novidade" if ids_nada_novo else ""
+    print(f"Concluído: {extraidos} processados{sem_novidade}, {len(ids_erro)} com erro{aviso}")
+    return {"total": len(cnjs), "processados": extraidos, "erros": len(ids_erro),
+            "revisao_manual": len(ids_revisao), "nada_novo": len(ids_nada_novo)}
 
 
 async def modo_local(data_str: str) -> None:

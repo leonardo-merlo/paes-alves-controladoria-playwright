@@ -4,11 +4,16 @@ sistema_auth.py — Detecta autenticação por sistema e abre abas no Chrome via
 
 import asyncio
 import json
+import time
 import urllib.request
 import urllib.parse
 from typing import Callable, Awaitable
 
 CDP_URL = "http://localhost:9222"
+
+# A leitura do DOM abre uma conexão Playwright; a cada 3s seria desperdício.
+# 12s mantém a detecção de login rápida sem pesar no loop de espera.
+INTERVALO_LEITURA_DOM_S = 12.0
 
 # URL base de cada sistema para abrir no Chrome
 SISTEMA_URLS = {
@@ -46,19 +51,101 @@ def _get_abas_chrome() -> list[dict]:
         return []
 
 
+# Campo de senha visível = a página ainda está pedindo login, por mais que o
+# endereço pareça o de dentro do sistema. Foi exatamente assim que eProc, TRF6 e
+# RUPE eram dados como logados no instante zero: o Chrome abre já no endereço
+# certo e a extração começava antes de o Henrique digitar a senha.
+JS_TEM_FORM_LOGIN = """() => {
+    for (const campo of document.querySelectorAll('input[type="password"]')) {
+        const r = campo.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
+    }
+    return false;
+}"""
+
+_ultima_leitura_dom: float = 0.0
+_forms_login: dict[str, bool] = {}
+_avisou_falha_dom: bool = False
+
+
+def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
+    """Decide se a aba representa uma sessão ativa. Função pura — ver test_sistema_auth.py."""
+    host = SISTEMA_HOST.get(sistema, "")
+    if not host or host not in url:
+        return False
+    if any(ind in url for ind in INDICADORES_DESLOGADO):
+        return False
+    return not tem_form_login
+
+
+async def _ler_forms_login(hosts: set[str]) -> dict[str, bool]:
+    """
+    Para cada aba dos hosts pedidos, diz se há campo de senha visível.
+    SÓ LÊ a página: nunca navega e nunca clica, porque roda enquanto o Henrique
+    está digitando a senha. Devolve {} se não der para ler.
+    """
+    # import local: o loop de espera não deve pagar o custo do Playwright
+    # quando não há nenhuma aba a conferir.
+    from playwright.async_api import async_playwright
+
+    playwright = None
+    browser = None
+    leitura: dict[str, bool] = {}
+    try:
+        playwright = await async_playwright().start()
+        browser = await playwright.chromium.connect_over_cdp(CDP_URL)
+        for ctx in browser.contexts:
+            for page in ctx.pages:
+                if not any(h in page.url for h in hosts):
+                    continue
+                try:
+                    leitura[page.url] = bool(await page.evaluate(JS_TEM_FORM_LOGIN))
+                except Exception:
+                    pass  # aba navegando: fica de fora e a URL decide sozinha
+        return leitura
+    except Exception:
+        return {}
+    finally:
+        if browser:
+            try:
+                await browser.close()  # CDP: close() apenas desconecta
+            except Exception:
+                pass
+        if playwright:
+            try:
+                await playwright.stop()
+            except Exception:
+                pass
+
+
 async def verificar_autenticacoes(sistemas: list[str]) -> dict[str, bool]:
     """
-    Verifica quais sistemas têm sessão ativa consultando as abas abertas no Chrome
-    via CDP HTTP (sem Playwright).
+    Verifica quais sistemas têm sessão ativa: endereço da aba (via CDP HTTP) mais
+    a confirmação de que a página não está exibindo formulário de login.
     """
+    global _ultima_leitura_dom, _forms_login, _avisou_falha_dom
+
     status: dict[str, bool] = {s: False for s in sistemas}
-    for aba in _get_abas_chrome():
+    abas = _get_abas_chrome()
+    hosts = {SISTEMA_HOST[s] for s in sistemas if s in SISTEMA_HOST}
+
+    agora = time.monotonic()
+    if hosts and agora - _ultima_leitura_dom >= INTERVALO_LEITURA_DOM_S:
+        _forms_login = await _ler_forms_login(hosts)
+        _ultima_leitura_dom = agora
+        if not _forms_login and not _avisou_falha_dom:
+            # sem a leitura do DOM a checagem vira só o endereço — que é o
+            # comportamento antigo, e o antigo errava. Melhor dizer em voz alta.
+            print("  Aviso: não foi possível ler a página das abas — "
+                  "detecção de login caiu para o endereço apenas.")
+            _avisou_falha_dom = True
+
+    for aba in abas:
         url = aba.get("url", "")
+        tem_form = _forms_login.get(url, False)
         for sistema in sistemas:
-            if not status[sistema]:
-                host = SISTEMA_HOST.get(sistema, "")
-                if host in url and not any(ind in url for ind in INDICADORES_DESLOGADO):
-                    status[sistema] = True
+            if not status[sistema] and _avaliar_login(url, sistema, tem_form):
+                status[sistema] = True
     return status
 
 

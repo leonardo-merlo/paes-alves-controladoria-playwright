@@ -125,20 +125,24 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     n_ok = resumo.get("processados", 0)
     n_err = resumo.get("erros", 0)
     n_rev = resumo.get("revisao_manual", 0)
+    n_novo = resumo.get("nada_novo", 0)
 
     # processo salvo sem análise não conta como erro, mas não pode passar em
     # silêncio: ele aparece no painel como pronto e sem prazo nenhum.
     aviso = f" {n_rev} sem análise — revisar." if n_rev else ""
+    # já estavam extraídos e não tinham documento novo: sucesso, mas não é
+    # extração desta rodada — somar no total faria o painel inflar o número.
+    novidade = f", {n_novo} sem novidade" if n_novo else ""
 
     if resumo.get("cdp_falhou"):
         return "erro", "Não foi possível abrir o navegador (CDP)."
     if total == 0:
         return "concluido", "Nenhum processo pendente."
-    if n_ok == 0:
+    if n_ok == 0 and n_novo == 0:
         return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique."
     if n_err > 0:
-        return "concluido", f"{n_ok} processado(s), {n_err} com erro.{aviso}"
-    return "concluido", f"{n_ok} processado(s).{aviso}"
+        return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{aviso}"
+    return "concluido", f"{n_ok} processado(s){novidade}.{aviso}"
 
 
 def main_loop() -> None:
