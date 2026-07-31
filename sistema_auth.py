@@ -5,19 +5,11 @@ sistema_auth.py — Detecta autenticação por sistema e abre abas no Chrome via
 import asyncio
 import json
 import re
-import time
 import urllib.request
 import urllib.parse
 from typing import Callable, Awaitable
 
 CDP_URL = "http://localhost:9222"
-
-# A leitura do DOM abre uma conexão Playwright; a cada 3s seria desperdício.
-# 12s mantém a detecção de login rápida sem pesar no loop de espera.
-INTERVALO_LEITURA_DOM_S = 12.0
-# tetos de segurança: a verificação de login nunca pode segurar o agente
-TIMEOUT_POR_ABA_S = 5.0
-TIMEOUT_LEITURA_DOM_S = 25.0
 
 # URL base de cada sistema para abrir no Chrome
 SISTEMA_URLS = {
@@ -55,39 +47,28 @@ def _get_abas_chrome() -> list[dict]:
         return []
 
 
+# ── peças da checagem boa, ainda sem uso ──────────────────────────
 # Campo de senha visível = a página ainda está pedindo login, por mais que o
-# endereço pareça o de dentro do sistema. Foi exatamente assim que eProc, TRF6 e
-# RUPE eram dados como logados no instante zero: o Chrome abre já no endereço
-# certo e a extração começava antes de o Henrique digitar a senha.
+# endereço pareça o de dentro do sistema. É o que resolveria de vez o eProc,
+# TRF6 e RUPE serem dados como logados no instante zero.
+# Falta a parte difícil: ler os campos da página sem Playwright (ver o aviso em
+# verificar_autenticacoes). Enquanto isso não existe, isto fica aqui coberto por
+# teste, pronto para ser ligado.
 #
-# A página devolve os campos e quem decide é o Python — dá para testar sem
-# navegador (test_sistema_auth.py guarda o formato real das duas telas).
-JS_CAMPOS_VISIVEIS = """() => [...document.querySelectorAll('input')]
-    .filter(el => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-    })
-    .map(el => ({ type: el.type, id: el.id, name: el.name }))"""
-
 # Procurar só por type="password" não basta: o eProc TJMG exibe a caixa de senha
 # como type="text" com id "pwdSenha" e mantém o campo password real com 0x0 atrás
-# dela. Quem olha só o type conclui que não há formulário — e foi assim que o
-# eProc passou por "logado" com a tela de login na frente.
+# dela. Quem olha só o type conclui que não há formulário.
 RE_CAMPO_SENHA = re.compile(r"senha|password|pwd", re.IGNORECASE)
 
 
 def _tem_campo_de_senha(campos: list[dict]) -> bool:
-    """A página está pedindo senha? Recebe os campos visíveis lidos do DOM."""
+    """A página está pedindo senha? Recebe os campos visíveis lidos da página."""
     for campo in campos:
         if campo.get("type") == "password":
             return True
         if RE_CAMPO_SENHA.search(f"{campo.get('id') or ''} {campo.get('name') or ''}"):
             return True
     return False
-
-_ultima_leitura_dom: float = 0.0
-_forms_login: dict[str, bool] = {}
-_avisou_falha_dom: bool = False
 
 
 def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
@@ -100,88 +81,28 @@ def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
     return not tem_form_login
 
 
-async def _ler_forms_login(hosts: set[str]) -> dict[str, bool]:
-    """
-    Lê as abas com tempo limite. Sem o teto, uma aba que fica carregando para
-    sempre trava o agente inteiro na verificação de login — e ele não chega nem
-    a abrir a extração.
-    """
-    try:
-        return await asyncio.wait_for(_ler_forms_login_sem_teto(hosts), TIMEOUT_LEITURA_DOM_S)
-    except Exception:
-        return {}
-
-
-async def _ler_forms_login_sem_teto(hosts: set[str]) -> dict[str, bool]:
-    """
-    Para cada aba dos hosts pedidos, diz se há campo de senha visível.
-    SÓ LÊ a página: nunca navega e nunca clica, porque roda enquanto o Henrique
-    está digitando a senha. Devolve {} se não der para ler.
-    """
-    # import local: o loop de espera não deve pagar o custo do Playwright
-    # quando não há nenhuma aba a conferir.
-    from playwright.async_api import async_playwright
-
-    playwright = None
-    browser = None
-    leitura: dict[str, bool] = {}
-    try:
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.connect_over_cdp(CDP_URL)
-        for ctx in browser.contexts:
-            for page in ctx.pages:
-                if not any(h in page.url for h in hosts):
-                    continue
-                try:
-                    campos = await asyncio.wait_for(
-                        page.evaluate(JS_CAMPOS_VISIVEIS), TIMEOUT_POR_ABA_S
-                    )
-                    leitura[page.url] = _tem_campo_de_senha(campos or [])
-                except Exception:
-                    pass  # aba navegando ou travada: a URL decide sozinha
-        return leitura
-    except Exception:
-        return {}
-    finally:
-        if browser:
-            try:
-                await browser.close()  # CDP: close() apenas desconecta
-            except Exception:
-                pass
-        if playwright:
-            try:
-                await playwright.stop()
-            except Exception:
-                pass
-
-
 async def verificar_autenticacoes(sistemas: list[str]) -> dict[str, bool]:
     """
-    Verifica quais sistemas têm sessão ativa: endereço da aba (via CDP HTTP) mais
-    a confirmação de que a página não está exibindo formulário de login.
+    Verifica quais sistemas têm sessão ativa consultando as abas abertas no Chrome
+    via CDP HTTP — sem Playwright.
+
+    ATENÇÃO antes de mexer aqui: já foi tentado ler o DOM das abas com Playwright
+    para detectar o formulário de login (que é o que resolveria de verdade). Na
+    máquina do Henrique a leitura falhou e, pior, o processo morreu com código -1
+    no meio do primeiro CNJ — o Playwright do extrator não sobrevive a uma segunda
+    instância aberta e fechada neste caminho. Este loop tem que ficar leve e sem
+    Playwright. As peças da checagem boa continuam abaixo (_tem_campo_de_senha e o
+    parâmetro tem_form_login de _avaliar_login), esperando uma forma de ler a
+    página que não seja o Playwright.
     """
-    global _ultima_leitura_dom, _forms_login, _avisou_falha_dom
-
     status: dict[str, bool] = {s: False for s in sistemas}
-    abas = _get_abas_chrome()
-    hosts = {SISTEMA_HOST[s] for s in sistemas if s in SISTEMA_HOST}
-
-    agora = time.monotonic()
-    if hosts and agora - _ultima_leitura_dom >= INTERVALO_LEITURA_DOM_S:
-        _forms_login = await _ler_forms_login(hosts)
-        _ultima_leitura_dom = agora
-        if not _forms_login and not _avisou_falha_dom:
-            # sem a leitura do DOM a checagem vira só o endereço — que é o
-            # comportamento antigo, e o antigo errava. Melhor dizer em voz alta.
-            print("  Aviso: não foi possível ler a página das abas — "
-                  "detecção de login caiu para o endereço apenas.")
-            _avisou_falha_dom = True
-
-    for aba in abas:
+    for aba in _get_abas_chrome():
         url = aba.get("url", "")
-        tem_form = _forms_login.get(url, False)
         for sistema in sistemas:
-            if not status[sistema] and _avaliar_login(url, sistema, tem_form):
+            # tem_form_login=False: sem leitura da página, só o endereço decide.
+            # É o comportamento antigo, com o defeito conhecido de dar eProc,
+            # TRF6 e RUPE como logados no instante zero.
+            if not status[sistema] and _avaliar_login(url, sistema, tem_form_login=False):
                 status[sistema] = True
     return status
 
