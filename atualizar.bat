@@ -59,7 +59,18 @@ echo.
 
 echo [3 de 3] Reiniciando o agente...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*agente.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
-echo          O agente reinicia sozinho em ate 15 segundos.
+
+echo          Aguardando o agente voltar...
+timeout /t 15 /nobreak >nul
+
+powershell -NoProfile -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*agente.py*' }) { exit 0 } else { exit 1 }"
+if errorlevel 1 (
+    echo          O agente nao voltou sozinho - iniciando o vigia...
+    start "" "%~dp0agente-watchdog.bat"
+    echo          Vigia iniciado. A janela do agente vai abrir.
+) else (
+    echo          Agente reiniciado.
+)
 echo.
 
 echo ==================================================
