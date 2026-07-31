@@ -4,6 +4,7 @@ sistema_auth.py — Detecta autenticação por sistema e abre abas no Chrome via
 
 import asyncio
 import json
+import re
 import time
 import urllib.request
 import urllib.parse
@@ -55,13 +56,31 @@ def _get_abas_chrome() -> list[dict]:
 # endereço pareça o de dentro do sistema. Foi exatamente assim que eProc, TRF6 e
 # RUPE eram dados como logados no instante zero: o Chrome abre já no endereço
 # certo e a extração começava antes de o Henrique digitar a senha.
-JS_TEM_FORM_LOGIN = """() => {
-    for (const campo of document.querySelectorAll('input[type="password"]')) {
-        const r = campo.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return true;
-    }
-    return false;
-}"""
+#
+# A página devolve os campos e quem decide é o Python — dá para testar sem
+# navegador (test_sistema_auth.py guarda o formato real das duas telas).
+JS_CAMPOS_VISIVEIS = """() => [...document.querySelectorAll('input')]
+    .filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    })
+    .map(el => ({ type: el.type, id: el.id, name: el.name }))"""
+
+# Procurar só por type="password" não basta: o eProc TJMG exibe a caixa de senha
+# como type="text" com id "pwdSenha" e mantém o campo password real com 0x0 atrás
+# dela. Quem olha só o type conclui que não há formulário — e foi assim que o
+# eProc passou por "logado" com a tela de login na frente.
+RE_CAMPO_SENHA = re.compile(r"senha|password|pwd", re.IGNORECASE)
+
+
+def _tem_campo_de_senha(campos: list[dict]) -> bool:
+    """A página está pedindo senha? Recebe os campos visíveis lidos do DOM."""
+    for campo in campos:
+        if campo.get("type") == "password":
+            return True
+        if RE_CAMPO_SENHA.search(f"{campo.get('id') or ''} {campo.get('name') or ''}"):
+            return True
+    return False
 
 _ultima_leitura_dom: float = 0.0
 _forms_login: dict[str, bool] = {}
@@ -99,7 +118,8 @@ async def _ler_forms_login(hosts: set[str]) -> dict[str, bool]:
                 if not any(h in page.url for h in hosts):
                     continue
                 try:
-                    leitura[page.url] = bool(await page.evaluate(JS_TEM_FORM_LOGIN))
+                    campos = await page.evaluate(JS_CAMPOS_VISIVEIS)
+                    leitura[page.url] = _tem_campo_de_senha(campos or [])
                 except Exception:
                     pass  # aba navegando: fica de fora e a URL decide sozinha
         return leitura
