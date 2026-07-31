@@ -15,6 +15,9 @@ CDP_URL = "http://localhost:9222"
 # A leitura do DOM abre uma conexão Playwright; a cada 3s seria desperdício.
 # 12s mantém a detecção de login rápida sem pesar no loop de espera.
 INTERVALO_LEITURA_DOM_S = 12.0
+# tetos de segurança: a verificação de login nunca pode segurar o agente
+TIMEOUT_POR_ABA_S = 5.0
+TIMEOUT_LEITURA_DOM_S = 25.0
 
 # URL base de cada sistema para abrir no Chrome
 SISTEMA_URLS = {
@@ -99,6 +102,18 @@ def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
 
 async def _ler_forms_login(hosts: set[str]) -> dict[str, bool]:
     """
+    Lê as abas com tempo limite. Sem o teto, uma aba que fica carregando para
+    sempre trava o agente inteiro na verificação de login — e ele não chega nem
+    a abrir a extração.
+    """
+    try:
+        return await asyncio.wait_for(_ler_forms_login_sem_teto(hosts), TIMEOUT_LEITURA_DOM_S)
+    except Exception:
+        return {}
+
+
+async def _ler_forms_login_sem_teto(hosts: set[str]) -> dict[str, bool]:
+    """
     Para cada aba dos hosts pedidos, diz se há campo de senha visível.
     SÓ LÊ a página: nunca navega e nunca clica, porque roda enquanto o Henrique
     está digitando a senha. Devolve {} se não der para ler.
@@ -118,10 +133,12 @@ async def _ler_forms_login(hosts: set[str]) -> dict[str, bool]:
                 if not any(h in page.url for h in hosts):
                     continue
                 try:
-                    campos = await page.evaluate(JS_CAMPOS_VISIVEIS)
+                    campos = await asyncio.wait_for(
+                        page.evaluate(JS_CAMPOS_VISIVEIS), TIMEOUT_POR_ABA_S
+                    )
                     leitura[page.url] = _tem_campo_de_senha(campos or [])
                 except Exception:
-                    pass  # aba navegando: fica de fora e a URL decide sozinha
+                    pass  # aba navegando ou travada: a URL decide sozinha
         return leitura
     except Exception:
         return {}
