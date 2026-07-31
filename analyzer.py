@@ -27,6 +27,13 @@ if _env_file.exists():
 CPC_DIR = Path("cpc")
 MODEL = "claude-haiku-4-5-20251001"
 MAX_DOCS_PARA_ANALISE = 7  # documentos mais recentes enviados ao modelo (texto completo)
+# Teto de caracteres do bloco de documentos. O limite real é a janela do modelo
+# (200 mil tokens no Haiku 4.5); 320 mil caracteres ~ 80 mil tokens deixa folga
+# para as regras do escritório e o índice do CPC no system prompt.
+MAX_CHARS_DOCUMENTOS = 320_000
+# Documentos que não couberam entram como referência (título + data). Os mais
+# antigos que isto já estão cobertos pela timeline de eventos.
+MAX_DOCS_REFERENCIADOS = 30
 
 def _carregar_arquivo_cpc(nome: str) -> str:
     path = CPC_DIR / nome
@@ -125,17 +132,52 @@ def _formatar_eventos(metadados_timeline: list[dict]) -> str:
     return "\n".join(linhas) if linhas else "[sem eventos capturados]"
 
 
-def _formatar_documentos(documentos: list[dict]) -> str:
-    recentes = documentos[:MAX_DOCS_PARA_ANALISE]
+def _formatar_documentos(documentos: list[dict]) -> tuple[str, int]:
+    """
+    Monta o bloco de documentos e devolve (texto, quantos foram na íntegra).
+
+    Um documento nunca é cortado ao meio nem resumido: ou entra inteiro, ou entra
+    só como referência (título e data). Cortar pelo meio arriscaria perder o
+    dispositivo — em despacho o prazo costuma estar no final —, e resumir perde
+    justamente a frase exata que define o prazo.
+
+    A fila começa pelo documento mais recente, que é o que determina o prazo e
+    costuma ser curto. Petições com centenas de páginas de anexo ficam de fora da
+    íntegra sem prejudicar a análise: para saber a fase processual, título e data
+    bastam.
+    """
     linhas = []
-    for doc in recentes:
+    chars_usados = 0
+    na_integra = 0
+
+    for doc in documentos[:MAX_DOCS_REFERENCIADOS]:
         texto = (doc.get("texto") or "").strip()
-        if not texto:
-            texto = "[INACESSÍVEL: sem texto extraído]"
-        linhas.append(
-            f"{doc['indice']} | {doc['numero_documento']} | {texto}"
+        cabecalho = f"{doc['indice']} | {doc['numero_documento']}"
+        rotulo = " | ".join(
+            p for p in ((doc.get("titulo") or "").strip(),
+                        (doc.get("data_documento") or "").strip()) if p
         )
-    return "\n\n".join(linhas)
+
+        if not texto:
+            linhas.append(f"{cabecalho} | {rotulo} | [INACESSÍVEL: sem texto extraído]")
+            continue
+
+        cabe = (
+            na_integra < MAX_DOCS_PARA_ANALISE
+            and chars_usados + len(texto) <= MAX_CHARS_DOCUMENTOS
+        )
+        if cabe:
+            linhas.append(f"{cabecalho} | {texto}")
+            chars_usados += len(texto)
+            na_integra += 1
+        else:
+            linhas.append(
+                f"{cabecalho} | {rotulo} | [NÃO ENVIADO NA ÍNTEGRA — "
+                f"{len(texto)} caracteres. Use apenas como contexto de fase "
+                "processual; não extraia prazo deste documento.]"
+            )
+
+    return "\n\n".join(linhas), na_integra
 
 
 def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
@@ -145,7 +187,14 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
     if not documentos:
         return {"erro": "sem_documentos", "numero_cnj": numero_cnj}
 
-    docs_formatados = _formatar_documentos(documentos)
+    docs_formatados, docs_na_integra = _formatar_documentos(documentos)
+
+    # Caso raro: o próprio documento mais recente é maior que o orçamento inteiro.
+    # Analisar só pela timeline daria um prazo com base em nada — melhor falhar e
+    # cair na revisão manual do que devolver um prazo sem fundamento.
+    if docs_na_integra == 0 and any((d.get("texto") or "").strip() for d in documentos):
+        return {"erro": "documento_grande_demais — nenhum documento coube na íntegra",
+                "numero_cnj": numero_cnj}
     eventos_formatados = _formatar_eventos(resultado_extracao.get("metadados_timeline", []))
     sistema = resultado_extracao.get("sistema", "pje_tjmg")
 
@@ -206,7 +255,7 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
             analise = json.loads(resposta_texto)
             analise["numero_cnj"] = numero_cnj
             analise["total_documentos_analisados"] = len(documentos)
-            analise["documentos_enviados_ao_modelo"] = min(len(documentos), MAX_DOCS_PARA_ANALISE)
+            analise["documentos_enviados_ao_modelo"] = docs_na_integra
             analise["modelo"] = MODEL
 
             u = message.usage

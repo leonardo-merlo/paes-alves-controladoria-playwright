@@ -212,9 +212,11 @@ async def processar_cnj(
     print(f"{prefixo} — analisando com Claude...")
     analise = analisar_processo(info.numero_cnj, resultado)
 
+    motivo_revisao: str | None = None
     if analise.get("erro"):
         # análise falhou (ex: sem créditos API) — salva os documentos mesmo assim
         print(f"{prefixo} — AVISO análise: {analise['erro']} — salvando documentos sem análise")
+        motivo_revisao = f"ANÁLISE NÃO GERADA ({analise['erro']}) — revisar manualmente"[:400]
         analise = {}  # rascunho vazio; pje_status ficará 'processado' sem análise
 
     if not analise.get("erro"):
@@ -235,6 +237,12 @@ async def processar_cnj(
         print(sb.get("tb", "(sem traceback)"))
         return {"erro": "supabase_falhou", "numero_cnj": info.numero_cnj}
 
+    if motivo_revisao:
+        # sem este aviso o processo fica 'processado' e some do painel sem prazo
+        # nenhum — o pior desfecho num sistema de controle de prazo, porque
+        # ninguém vai olhar de novo um processo que aparece como pronto.
+        resultado["revisao_manual"] = motivo_revisao
+
     return resultado
 
 
@@ -246,10 +254,11 @@ async def processar_por_sistema(
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
     modo_auto: bool = False,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
-    Retorna (ids_ok, ids_erro) para atualizar o Supabase.
+    Retorna (ids_ok, ids_erro, ids_revisao) para atualizar o Supabase.
+    `ids_revisao` são processos salvos porém sem análise — precisam de aviso.
     """
 
     # separar por sistema
@@ -283,11 +292,12 @@ async def processar_por_sistema(
 
     if not por_sistema:
         print("Nenhum CNJ para processar.")
-        return [], []
+        return [], [], []
 
     sistemas_necessarios = list(por_sistema.keys())
     ids_ok: list[str] = []
     ids_erro: list[str] = []
+    ids_revisao: list[tuple[str, str]] = []
 
     async def _processar_sistema(sistema: str) -> None:
         infos = por_sistema[sistema]
@@ -301,6 +311,8 @@ async def processar_por_sistema(
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
             if resultado and not resultado.get("erro") and cnj_id:
                 ids_ok.append(cnj_id)
+                if resultado.get("revisao_manual"):
+                    ids_revisao.append((cnj_id, resultado["revisao_manual"]))
             elif cnj_id:
                 ids_erro.append(cnj_id)
                 marcar_supabase([cnj_id], "erro_browser", motivo_do_erro(resultado))
@@ -320,7 +332,7 @@ async def processar_por_sistema(
     else:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
         if not ok:
-            return [], []
+            return [], [], []
         for sistema in sistemas_necessarios:
             await _processar_sistema(sistema)
 
@@ -329,7 +341,7 @@ async def processar_por_sistema(
         ids_nao_impl = [ids_map[i.numero_cnj] for i in nao_impl if i.numero_cnj in ids_map]
         marcar_supabase(ids_nao_impl, "ignorado", "Sistema não implementado")
 
-    return ids_ok, ids_erro
+    return ids_ok, ids_erro, ids_revisao
 
 
 # ── modos de execução ─────────────────────────────────────────────
@@ -349,14 +361,22 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro = await processar_por_sistema(cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto)
+    ids_ok, ids_erro, ids_revisao = await processar_por_sistema(
+        cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto
+    )
     print(f"ids_ok={ids_ok}")
     print(f"ids_erro={ids_erro}")
     marcar_supabase(ids_ok, "processado")
+    # depois de marcar 'processado' (que limpa motivo_ignorado), reescreve o aviso
+    # nos que ficaram sem análise — senão eles aparecem no painel como prontos.
+    for cnj_id, motivo in ids_revisao:
+        marcar_supabase([cnj_id], "processado", motivo)
     # os ids com erro já foram marcados um a um, com o motivo real, dentro de
     # _processar_sistema — remarcar em bloco aqui sobrescreveria esse detalhe.
-    print(f"Concluído: {len(ids_ok)} processados, {len(ids_erro)} com erro")
-    return {"total": len(cnjs), "processados": len(ids_ok), "erros": len(ids_erro)}
+    aviso = f", {len(ids_revisao)} sem análise (revisão manual)" if ids_revisao else ""
+    print(f"Concluído: {len(ids_ok)} processados, {len(ids_erro)} com erro{aviso}")
+    return {"total": len(cnjs), "processados": len(ids_ok), "erros": len(ids_erro),
+            "revisao_manual": len(ids_revisao)}
 
 
 async def modo_local(data_str: str) -> None:
