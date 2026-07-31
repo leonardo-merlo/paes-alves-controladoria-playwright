@@ -65,7 +65,25 @@ def marcar_supabase(ids: list[str], status: str, motivo: str | None = None) -> N
     update: dict = {"pje_status": status}
     if motivo:
         update["motivo_ignorado"] = motivo
+    elif status == "processado":
+        # sem limpar, um processo que volta a dar certo carrega para sempre o
+        # motivo da falha anterior — o painel passa a mentir sobre o estado atual.
+        update["motivo_ignorado"] = None
     client.table("processos").update(update).in_("id", ids).execute()
+
+
+def motivo_do_erro(resultado: dict | None) -> str:
+    """
+    Mensagem real do extrator, para gravar em `motivo_ignorado`.
+    Sem isto o banco só guarda "Erro durante processamento" e o diagnóstico
+    depende de alguém estar olhando o terminal na hora em que falhou.
+    """
+    if not resultado:
+        return "Erro durante processamento (extrator não retornou resultado)"
+    erro = str(resultado.get("erro") or "desconhecido").strip()
+    detalhe = str(resultado.get("mensagem") or "").strip()
+    texto = f"{erro} — {detalhe}" if detalhe else erro
+    return texto[:400]
 
 
 def inserir_processos_pendentes(
@@ -285,7 +303,7 @@ async def processar_por_sistema(
                 ids_ok.append(cnj_id)
             elif cnj_id:
                 ids_erro.append(cnj_id)
-                marcar_supabase([cnj_id], "erro_browser", "Erro durante processamento")
+                marcar_supabase([cnj_id], "erro_browser", motivo_do_erro(resultado))
         print()
 
     if modo_auto:
@@ -335,7 +353,8 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
     print(f"ids_ok={ids_ok}")
     print(f"ids_erro={ids_erro}")
     marcar_supabase(ids_ok, "processado")
-    marcar_supabase(ids_erro, "erro_browser", "Erro durante processamento")
+    # os ids com erro já foram marcados um a um, com o motivo real, dentro de
+    # _processar_sistema — remarcar em bloco aqui sobrescreveria esse detalhe.
     print(f"Concluído: {len(ids_ok)} processados, {len(ids_erro)} com erro")
     return {"total": len(cnjs), "processados": len(ids_ok), "erros": len(ids_erro)}
 
