@@ -27,6 +27,7 @@ INPUTS_DIR = Path("inputs")
 MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
                  "abra de novo, faça login e rode outra vez")
 MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
+MOTIVO_LOGIN_PENDENTE = "Login ainda não estava feito quando a extração tentou"
 
 
 # ── helpers locais ────────────────────────────────────────────────
@@ -379,7 +380,13 @@ async def processar_por_sistema(
             print(f"  {len(ids)} CNJ(s) devolvidos à fila")
         marcar_supabase(ids, "pendente", motivo)
 
-    async def _processar_sistema(sistema: str) -> None:
+    async def _processar_sistema(sistema: str) -> bool:
+        """
+        Processa a fila de um sistema. Devolve False quando não havia sessão logo
+        no PRIMEIRO processo — sinal de que ninguém logou ainda e vale tentar de
+        novo mais tarde. Todo o resto devolve True: o sistema está resolvido para
+        esta rodada, mesmo que tenha dado erro.
+        """
         nonlocal chrome_morreu
         infos = por_sistema[sistema]
         total = len(infos)
@@ -387,7 +394,7 @@ async def processar_por_sistema(
         if chrome_morreu:
             print(f"[{sistema}] pulado — o Chrome não está respondendo")
             _devolver_a_fila(infos, MOTIVO_CHROME)
-            return
+            return True
 
         print(f"{'='*50}")
         print(f"[{sistema}] {total} CNJ(s)\n")
@@ -408,6 +415,13 @@ async def processar_por_sistema(
                 # seguir a fila só queima os CNJs restantes contra um sistema
                 # deslogado — em 29/07 foram 37 assim, em 1h40. O que não chegou
                 # a ser tentado volta para 'pendente': não é erro, é fila.
+                if i == 1:
+                    # falhar já no primeiro é a assinatura de "ninguém logou
+                    # ainda", não de sessão que caiu. Nada foi extraído, então
+                    # tentar de novo mais tarde não repete trabalho nenhum.
+                    print(f"  [{sistema}] sem sessão ainda — fila devolvida, tentará de novo")
+                    _devolver_a_fila(infos, MOTIVO_LOGIN_PENDENTE)
+                    return False
                 print(f"  [{sistema}] sessão caiu — devolvendo o resto da fila")
                 _devolver_a_fila(infos[i - 1:], MOTIVO_SESSAO)
                 break
@@ -422,6 +436,7 @@ async def processar_por_sistema(
                 ids_erro.append(cnj_id)
                 marcar_supabase([cnj_id], "erro_browser", motivo_do_erro(resultado))
         print()
+        return True
 
     if modo_auto:
         processados = await monitorar_logins_e_processar(sistemas_necessarios, _processar_sistema)
@@ -433,11 +448,11 @@ async def processar_por_sistema(
                 for info in por_sistema.get(s, [])
                 if info.numero_cnj in ids_map
             ]
-            # login não concluído = ninguém tentou extrair. Marcar erro aqui fazia
-            # o painel acusar falha em processo que nunca foi aberto.
+            # login não concluído = não houve extração. Marcar erro aqui fazia
+            # o painel acusar falha em processo que nunca chegou a ser lido.
             marcar_supabase(
                 ids_timeout, "pendente",
-                "Login não concluído dentro do tempo — não chegou a ser tentado",
+                "Login não concluído dentro do tempo — nenhuma sessão ativa nas tentativas",
             )
     else:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)

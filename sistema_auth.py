@@ -37,6 +37,28 @@ SISTEMA_HOST = {
 INDICADORES_DESLOGADO = ["/login", "/Login", "login.seam", "token_invalid",
                          "sessao_expirada", "externo_controlador"]
 
+# Sistemas cuja tela de login mora no MESMO endereço da tela interna: pelo
+# endereço não há como distinguir logado de deslogado. Olhar só a URL os dava como
+# logados no instante zero, e o agente extraía antes de o Henrique logar — em
+# 02/08/2026 isso queimou a fila inteira do eProc (15) e do RUPE (2) no primeiro
+# CNJ, com o Henrique logando enquanto o agente já tinha desistido.
+# Para estes não existe sinal de login para esperar: o agente tenta de tempos em
+# tempos e deixa o extrator, que sabe ler a tela, dizer se havia sessão.
+# O PJe fica de fora porque deslogado ele redireciona para login.seam — ali a
+# leitura do endereço funciona, e é por isso que o PJe nunca falhou assim.
+SEM_DETECCAO_DE_LOGIN = {"eproc_tjmg", "eproc_trf6", "eproc_trf6_2g", "pje_tjmg_2inst"}
+
+# Quanto tempo o Henrique tem para logar entre uma tentativa e outra, e quantas
+# tentativas até desistir. Contando a tentativa imediata (ver deve_tentar), as
+# quatro caem em: 0, 5, 10 e 15 minutos.
+#
+# O espaçamento é largo de propósito, por dois motivos. O login do eProc e do RUPE
+# exige um código temporário que chega por e-mail — ninguém conclui isso em um
+# minuto. E verificar_sessao do RUPE recarrega a aba: tentar com frequência
+# apagaria justamente o código que ele estivesse colando.
+ESPERA_LOGIN_S = 300
+MAX_TENTATIVAS_LOGIN = 4
+
 
 def _get_abas_chrome() -> list[dict]:
     """Lista as abas abertas no Chrome via CDP HTTP — sem Playwright, sem Avast."""
@@ -49,11 +71,13 @@ def _get_abas_chrome() -> list[dict]:
 
 # ── peças da checagem boa, ainda sem uso ──────────────────────────
 # Campo de senha visível = a página ainda está pedindo login, por mais que o
-# endereço pareça o de dentro do sistema. É o que resolveria de vez o eProc,
-# TRF6 e RUPE serem dados como logados no instante zero.
+# endereço pareça o de dentro do sistema. É a cura para o eProc, o TRF6 e o RUPE,
+# que por endereço nenhum são distinguíveis (ver SEM_DETECCAO_DE_LOGIN). A
+# tentativa espaçada que está no ar hoje é margem, não cura.
 # Falta a parte difícil: ler os campos da página sem Playwright (ver o aviso em
 # verificar_autenticacoes). Enquanto isso não existe, isto fica aqui coberto por
-# teste, pronto para ser ligado.
+# teste, pronto para ser ligado — o caminho está em
+# docs/deteccao-de-login-correcao-definitiva.md.
 #
 # Procurar só por type="password" não basta: o eProc TJMG exibe a caixa de senha
 # como type="text" com id "pwdSenha" e mantém o campo password real com 0x0 atrás
@@ -81,27 +105,74 @@ def _avaliar_login(url: str, sistema: str, tem_form_login: bool) -> bool:
     return not tem_form_login
 
 
+def deve_tentar(
+    sistema: str,
+    detectado_logado: bool,
+    segundos_desde_a_ultima: float,
+    tentativas_feitas: int,
+) -> bool:
+    """
+    Chegou a hora de tentar extrair este sistema? Função pura — ver test_sistema_auth.py.
+
+    Sistema com detecção confiável (PJe): tenta assim que o login aparece no
+    endereço. Sistema sem detecção: não existe sinal para esperar, então tenta
+    quando o tempo de login se esgota. Nos dois casos vale o teto de tentativas e
+    o intervalo mínimo entre elas — sem o intervalo, um sistema dado como logado
+    mas com a sessão caída seria tentado de 3 em 3 segundos até o timeout.
+    """
+    if tentativas_feitas >= MAX_TENTATIVAS_LOGIN:
+        return False
+    if tentativas_feitas > 0 and segundos_desde_a_ultima < ESPERA_LOGIN_S:
+        return False
+    if sistema in SEM_DETECCAO_DE_LOGIN:
+        # a primeira é imediata: se a sessão já estava de pé (Chrome aberto desde
+        # a rodada anterior), extrai na hora em vez de cobrar espera de quem não
+        # precisa. Custa segundos e acontece antes de o usuário começar a digitar.
+        return tentativas_feitas == 0 or segundos_desde_a_ultima >= ESPERA_LOGIN_S
+    return detectado_logado
+
+
+def _esgotou_as_tentativas(
+    sistemas: list[str], processados: set[str], tentativas: dict[str, int]
+) -> bool:
+    """
+    Todo mundo que falta já gastou as tentativas? Serve para encerrar a espera sem
+    ficar parado até o timeout quando não há mais o que tentar.
+    Função pura — ver test_sistema_auth.py.
+    """
+    restantes = [s for s in sistemas if s not in processados]
+    if not restantes:
+        return False
+    return all(tentativas.get(s, 0) >= MAX_TENTATIVAS_LOGIN for s in restantes)
+
+
 async def verificar_autenticacoes(sistemas: list[str]) -> dict[str, bool]:
     """
     Verifica quais sistemas têm sessão ativa consultando as abas abertas no Chrome
     via CDP HTTP — sem Playwright.
+
+    Só responde pelos sistemas em que o endereço basta para decidir. Os de
+    SEM_DETECCAO_DE_LOGIN saem sempre como False: para eles a URL não distingue
+    logado de deslogado, e afirmar "logado" era exatamente o defeito que fazia o
+    agente extrair antes da hora. Quem cuida desses é deve_tentar().
 
     ATENÇÃO antes de mexer aqui: já foi tentado ler o DOM das abas com Playwright
     para detectar o formulário de login (que é o que resolveria de verdade). Na
     máquina do Henrique a leitura falhou e, pior, o processo morreu com código -1
     no meio do primeiro CNJ — o Playwright do extrator não sobrevive a uma segunda
     instância aberta e fechada neste caminho. Este loop tem que ficar leve e sem
-    Playwright. As peças da checagem boa continuam abaixo (_tem_campo_de_senha e o
+    Playwright. As peças da checagem boa continuam acima (_tem_campo_de_senha e o
     parâmetro tem_form_login de _avaliar_login), esperando uma forma de ler a
-    página que não seja o Playwright.
+    página que não seja o Playwright — ver
+    docs/deteccao-de-login-correcao-definitiva.md.
     """
     status: dict[str, bool] = {s: False for s in sistemas}
     for aba in _get_abas_chrome():
         url = aba.get("url", "")
         for sistema in sistemas:
+            if sistema in SEM_DETECCAO_DE_LOGIN:
+                continue
             # tem_form_login=False: sem leitura da página, só o endereço decide.
-            # É o comportamento antigo, com o defeito conhecido de dar eProc,
-            # TRF6 e RUPE como logados no instante zero.
             if not status[sistema] and _avaliar_login(url, sistema, tem_form_login=False):
                 status[sistema] = True
     return status
@@ -134,21 +205,29 @@ async def abrir_abas_para_auth(sistemas_nao_autenticados: list[str]) -> None:
 
 async def monitorar_logins_e_processar(
     sistemas: list[str],
-    ao_logar: Callable[[str], Awaitable[None]],
-    timeout_s: int = 600,
+    ao_logar: Callable[[str], Awaitable[bool]],
+    timeout_s: int = 1500,
     intervalo_s: int = 3,
 ) -> set[str]:
     """
     Abre abas para os sistemas que precisam de login e fica monitorando.
-    Assim que cada sistema logar, dispara a extração dele imediatamente —
-    sem esperar os outros. Sistemas que não logarem dentro do timeout são
-    pulados e marcados para retentativa automática.
+
+    Sistema com detecção confiável (PJe): a extração dispara assim que o login
+    aparece no endereço da aba, sem esperar os outros. Sistema sem detecção
+    (SEM_DETECCAO_DE_LOGIN): não há sinal para esperar, então o agente dá
+    ESPERA_LOGIN_S e tenta assim mesmo, até MAX_TENTATIVAS_LOGIN vezes — quem diz
+    se havia sessão é o extrator, que lê a tela e acerta.
+
+    `ao_logar` devolve False quando não havia sessão logo no primeiro processo
+    (ninguém logou ainda). Só nesse caso o sistema volta para a fila de tentativas.
+    Sistemas que não logarem a tempo são pulados e devolvidos à fila pelo runner.
     Retorna o conjunto de sistemas que foram processados.
     """
     loop = asyncio.get_running_loop()
-    inicio = loop.time()
     processados: set[str] = set()
     ja_avisados: set[str] = set()
+    tentativas: dict[str, int] = {s: 0 for s in sistemas}
+    ultima_tentativa: dict[str, float] = {s: loop.time() for s in sistemas}
 
     print("\nVerificando autenticação nos sistemas...")
     status = await verificar_autenticacoes(sistemas)
@@ -161,51 +240,69 @@ async def monitorar_logins_e_processar(
         print(f"  Necessita login: {', '.join(nao_logados)}")
         await abrir_abas_para_auth(nao_logados)
 
-    print(f"\nA extração inicia em cada sistema assim que o login for detectado.")
-    print(f"Timeout por sistema: {timeout_s // 60} min.\n")
+    cegos = [s for s in sistemas if s in SEM_DETECCAO_DE_LOGIN]
+    com_deteccao = [s for s in sistemas if s not in SEM_DETECCAO_DE_LOGIN]
 
-    # se há sistemas com sessão ativa E sistemas aguardando login, dar uma janela
-    # para o usuário concluir os logins antes de processar qualquer sistema —
-    # evita processar um sistema com sessão aparentemente ativa que na verdade expirou
-    GRACA_S = 30
-    if ja_logados and nao_logados:
-        print(f"  Aguardando {GRACA_S}s para que você conclua os logins pendentes...")
-        await asyncio.sleep(GRACA_S)
-        status = await verificar_autenticacoes(sistemas)
-        ja_logados  = [s for s, ok in status.items() if ok]
-        nao_logados = [s for s, ok in status.items() if not ok]
-        if nao_logados:
-            await abrir_abas_para_auth(nao_logados)
+    print()
+    if com_deteccao:
+        print(f"  {', '.join(com_deteccao)}: a extração começa assim que o login for detectado.")
+    if cegos:
+        print(f"  {', '.join(cegos)}: não dá para conferir o login por aqui — a extração")
+        print(f"  tenta a cada {ESPERA_LOGIN_S // 60} min, até {MAX_TENTATIVAS_LOGIN} vezes. "
+              f"Faça login com calma.")
+    print(f"  Tempo máximo de espera: {timeout_s // 60} min.\n")
 
-    for sistema in ja_logados:
-        ja_avisados.add(sistema)
-        processados.add(sistema)
-        await ao_logar(sistema)
+    # Aqui havia uma pausa de 30s antes de extrair os sistemas já logados, para dar
+    # tempo de concluir os logins pendentes. Não fazia sentido: 30 segundos não dão
+    # para logar em sistema nenhum — o eProc e o RUPE ainda pedem um código que
+    # chega por e-mail. E quem protege contra sessão que parece ativa mas expirou
+    # agora é a retentativa, que é o extrator quem decide. Só atrasava o PJe.
 
-    # zera o relógio antes de esperar os sistemas pendentes: o tempo gasto
-    # extraindo os sistemas já logados acima não deve consumir a janela de
-    # login dos que ainda faltam (senão um sistema logado a tempo é pulado).
+    # zera o relógio antes do laço: o tempo gasto abrindo as abas não deve
+    # consumir a espera de login de ninguém.
     inicio = loop.time()
 
     while len(processados) < len(sistemas):
         if loop.time() - inicio > timeout_s:
             restantes = [s for s in sistemas if s not in processados]
-            print(f"\nTimeout: {', '.join(restantes)} não respondeu — pulando.")
+            print(f"\nTempo esgotado: {', '.join(restantes)} não respondeu — pulando.")
             break
 
         restantes = [s for s in sistemas if s not in processados]
         status = await verificar_autenticacoes(restantes)
 
-        for sistema, ok in status.items():
-            if ok and sistema not in ja_avisados:
+        for sistema in restantes:
+            detectado = status.get(sistema, False)
+            if detectado and sistema not in ja_avisados:
                 ja_avisados.add(sistema)
                 print(f"  ✓ Login detectado: {sistema}")
-            if ok and sistema not in processados:
+
+            espera = loop.time() - ultima_tentativa[sistema]
+            if not deve_tentar(sistema, detectado, espera, tentativas[sistema]):
+                continue
+
+            tentativas[sistema] += 1
+            if sistema in SEM_DETECCAO_DE_LOGIN:
+                print(f"  Tentando {sistema} — tentativa "
+                      f"{tentativas[sistema]}/{MAX_TENTATIVAS_LOGIN}")
+
+            if await ao_logar(sistema):
                 processados.add(sistema)
-                await ao_logar(sistema)
                 # zerar o contador após cada extração — o usuário tem tempo cheio
                 # para logar no próximo sistema, independente de quanto demorou a extração anterior
                 inicio = loop.time()
+            else:
+                print(f"  {sistema}: ainda sem login — nova tentativa em "
+                      f"{ESPERA_LOGIN_S // 60} min.")
+            # conta o intervalo a partir do FIM da tentativa: a extração em si pode
+            # levar minutos, e contar do início encurtaria a espera do usuário.
+            ultima_tentativa[sistema] = loop.time()
+
+        if _esgotou_as_tentativas(sistemas, processados, tentativas):
+            restantes = [s for s in sistemas if s not in processados]
+            print(f"\n{', '.join(restantes)}: login não concluído em "
+                  f"{MAX_TENTATIVAS_LOGIN} tentativas — pulando.")
+            break
 
         if any(s not in processados for s in sistemas):
             await asyncio.sleep(intervalo_s)
@@ -218,7 +315,15 @@ async def aguardar_login_automatico(
     timeout_s: int = 600,
     intervalo_s: int = 3,
 ) -> bool:
-    """Aguarda todos os sistemas logarem. Usado no modo manual (Enter)."""
+    """
+    Aguarda todos os sistemas logarem.
+
+    NÃO SERVE para os sistemas de SEM_DETECCAO_DE_LOGIN: eles nunca aparecem como
+    logados, então o `all(...)` abaixo jamais fecha e isto só devolve False no fim
+    do timeout. Hoje ninguém chama por esse caminho — o fluxo automático é o
+    monitorar_logins_e_processar, que trata esses sistemas por tentativa. Se um dia
+    for preciso ressuscitar o modo abaixo, ele precisa da mesma lógica de tentativa.
+    """
     loop = asyncio.get_event_loop()
     inicio = loop.time()
     ja_avisados: set[str] = set()
