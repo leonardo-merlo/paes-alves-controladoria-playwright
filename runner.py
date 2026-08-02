@@ -24,6 +24,10 @@ from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 
 INPUTS_DIR = Path("inputs")
 
+MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
+                 "abra de novo, faça login e rode outra vez")
+MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
+
 
 # ── helpers locais ────────────────────────────────────────────────
 
@@ -113,6 +117,19 @@ def eh_queda_de_sessao(resultado: dict | None) -> bool:
     if not resultado:
         return False
     return "sessao_expirada" in str(resultado.get("erro") or "")
+
+
+def eh_chrome_inacessivel(resultado: dict | None) -> bool:
+    """
+    Não dá para falar com o Chrome. Insistir é pior que parar: cada CNJ gasta os
+    180s de timeout do Playwright antes de falhar, e uma fila de 20 vira uma hora
+    de nada. Além disso o Chrome nesse estado não se recupera sozinho — precisa
+    ser fechado e aberto de novo.
+    """
+    if not resultado:
+        return False
+    erro = str(resultado.get("erro") or "")
+    return "connect_over_cdp" in erro or "conectar ao Chrome" in erro
 
 
 def motivo_do_erro(resultado: dict | None) -> str:
@@ -351,9 +368,27 @@ async def processar_por_sistema(
     ids_revisao: list[tuple[str, str]] = []
     ids_nada_novo: list[str] = []
 
+    # o Chrome travado não se recupera sozinho: uma vez detectado, nenhum sistema
+    # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
+    chrome_morreu = False
+
+    def _devolver_a_fila(restantes: list[CNJInfo], motivo: str) -> None:
+        ids = [ids_map[o.numero_cnj] for o in restantes
+               if ids_map and o.numero_cnj in ids_map]
+        if ids:
+            print(f"  {len(ids)} CNJ(s) devolvidos à fila")
+        marcar_supabase(ids, "pendente", motivo)
+
     async def _processar_sistema(sistema: str) -> None:
+        nonlocal chrome_morreu
         infos = por_sistema[sistema]
         total = len(infos)
+
+        if chrome_morreu:
+            print(f"[{sistema}] pulado — o Chrome não está respondendo")
+            _devolver_a_fila(infos, MOTIVO_CHROME)
+            return
+
         print(f"{'='*50}")
         print(f"[{sistema}] {total} CNJ(s)\n")
         for i, info in enumerate(infos, 1):
@@ -362,17 +397,19 @@ async def processar_por_sistema(
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
 
+            if eh_chrome_inacessivel(resultado):
+                chrome_morreu = True
+                print(f"  [{sistema}] o Chrome parou de responder — abortando a rodada")
+                print(f"  >>> {MOTIVO_CHROME}")
+                _devolver_a_fila(infos[i - 1:], MOTIVO_CHROME)
+                break
+
             if eh_queda_de_sessao(resultado):
                 # seguir a fila só queima os CNJs restantes contra um sistema
                 # deslogado — em 29/07 foram 37 assim, em 1h40. O que não chegou
                 # a ser tentado volta para 'pendente': não é erro, é fila.
-                restantes = [ids_map[o.numero_cnj] for o in infos[i - 1:]
-                             if ids_map and o.numero_cnj in ids_map]
-                print(f"  [{sistema}] sessão caiu — {len(restantes)} CNJ(s) devolvidos à fila")
-                marcar_supabase(
-                    restantes, "pendente",
-                    "Sessão caiu durante a rodada — refazer login e rodar de novo",
-                )
+                print(f"  [{sistema}] sessão caiu — devolvendo o resto da fila")
+                _devolver_a_fila(infos[i - 1:], MOTIVO_SESSAO)
                 break
 
             if resultado and not resultado.get("erro") and cnj_id:

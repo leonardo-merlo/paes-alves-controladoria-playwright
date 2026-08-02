@@ -18,6 +18,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from cnj_router import rotear
 from runner import modo_supabase
+from sistema_auth import _get_abas_chrome, SISTEMA_HOST
 from supabase_writer import _get_client, _carregar_env
 
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
@@ -26,8 +27,8 @@ CDP_PORT = 9222
 CDP_URL = f"http://localhost:{CDP_PORT}"
 
 
-def _coletar_urls_pendentes() -> list[str]:
-    """Consulta os pendentes no Supabase e devolve as URLs únicas a abrir."""
+def _coletar_urls_pendentes() -> dict[str, str]:
+    """Consulta os pendentes no Supabase e devolve {sistema: url} a abrir."""
     _carregar_env()
     client = _get_client()
     res = (
@@ -44,13 +45,31 @@ def _coletar_urls_pendentes() -> list[str]:
         info = rotear(row["numero_cnj"], row.get("sistema"))
         if info.url:
             urls_por_sistema[info.sistema] = info.url
+    return urls_por_sistema
 
-    if urls_por_sistema:
-        print(f"Abrindo Chrome com {len(urls_por_sistema)} aba(s):")
-        for sistema, url in urls_por_sistema.items():
-            print(f"  {sistema}: {url}")
 
-    return list(urls_por_sistema.values())
+def _urls_que_faltam(urls_por_sistema: dict[str, str]) -> list[str]:
+    """
+    Só as URLs dos sistemas que ainda não têm aba aberta.
+
+    Sem isto, cada clique em "Iniciar" jogava 3 abas novas na mesma janela do
+    Chrome, porque o chrome.exe era chamado com as URLs sempre, sem olhar o que
+    já estava aberto. Medido em 31/07/2026: com 3 abas o extrator conecta em
+    0,5s; com 15 abas de sistema judicial ele estoura o limite de 180s do
+    Playwright. E, uma vez estourado, aquele Chrome não volta a responder nem
+    fechando as abas — só fechando o Chrome inteiro. Foi o que travou a máquina
+    do Henrique por uma tarde.
+    """
+    abertas = [aba.get("url", "") for aba in _get_abas_chrome()]
+    faltando: list[str] = []
+    for sistema, url in urls_por_sistema.items():
+        host = SISTEMA_HOST.get(sistema, "")
+        if host and any(host in aberta for aberta in abertas):
+            print(f"  {sistema}: aba já aberta — reaproveitando")
+            continue
+        print(f"  {sistema}: {url}")
+        faltando.append(url)
+    return faltando
 
 
 async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -> bool:
@@ -65,18 +84,30 @@ async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -
 
 
 async def main() -> dict:
-    urls = _coletar_urls_pendentes()
-    if not urls:
+    urls_por_sistema = _coletar_urls_pendentes()
+    if not urls_por_sistema:
         print("Nenhum processo pendente. Nada a fazer.")
         return {"total": 0, "processados": 0, "erros": 0}
 
-    cmd = [
-        CHROME_PATH,
-        f"--remote-debugging-port={CDP_PORT}",
-        f"--user-data-dir={CHROME_DEBUG_DIR}",
-        *urls,
-    ]
-    subprocess.Popen(cmd)
+    chrome_de_pe = bool(_get_abas_chrome())
+    if chrome_de_pe:
+        print("Chrome já aberto — conferindo quais abas faltam:")
+        urls = _urls_que_faltam(urls_por_sistema)
+    else:
+        print(f"Abrindo Chrome com {len(urls_por_sistema)} aba(s):")
+        for sistema, url in urls_por_sistema.items():
+            print(f"  {sistema}: {url}")
+        urls = list(urls_por_sistema.values())
+
+    # com o Chrome de pé e nenhuma aba faltando, chamar o chrome.exe só serviria
+    # para empilhar aba — que é exatamente o que trava o navegador.
+    if urls or not chrome_de_pe:
+        subprocess.Popen([
+            CHROME_PATH,
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={CHROME_DEBUG_DIR}",
+            *urls,
+        ])
 
     if not await _aguardar_cdp_pronto():
         print("Não foi possível conectar ao Chrome (CDP). Verifique se ele abriu.")
