@@ -15,16 +15,31 @@ import asyncio
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from iniciar import main as executar_extracao
 from supabase_writer import _get_client, _carregar_env
 
 INTERVALO_S = 3
 
+# Enquanto este arquivo existir na pasta, o agente ignora comandos novos. Serve
+# para tirar uma máquina do ar — por exemplo, rodar as extrações noutro
+# computador — sem mexer na inicialização do Windows e sem depender de alguém
+# lembrar de fechar a janela: o agente pode subir sozinho que fica quieto.
+# Está no .gitignore de propósito, para o atualizar.bat não apagá-lo.
+# Não interrompe rodada em andamento: só impede que a próxima comece.
+NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
+
 # Uma rodada de extração leva 20-45min. Um comando 'em_andamento' mais antigo
 # que isto é tratado como rodada abandonada (agente caiu no meio) e deixa de
 # bloquear novas rodadas — senão a fila travaria pra sempre após um crash.
 LIMITE_RODADA_ABANDONADA_MIN = 90
+
+
+def esta_pausado(pasta: Path | None = None) -> bool:
+    """Esta máquina foi colocada em pausa? Ver NOME_ARQUIVO_PAUSA."""
+    base = pasta or Path(__file__).parent
+    return (base / NOME_ARQUIVO_PAUSA).exists()
 
 
 def proximo_pendente(comandos: list[dict]) -> dict | None:
@@ -149,9 +164,19 @@ def main_loop() -> None:
     _carregar_env()
     client = _get_client()
     print("Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
+    avisou_pausa = False
     while True:
         try:
-            processar_um(client)
+            if esta_pausado():
+                if not avisou_pausa:
+                    print(f"\nAGENTE PAUSADO nesta máquina ({NOME_ARQUIVO_PAUSA} existe).")
+                    print("Nenhuma extração será executada aqui. Para religar, use voltar-agente.bat\n")
+                    avisou_pausa = True
+            else:
+                if avisou_pausa:
+                    print("\nAgente religado. Aguardando comandos...\n")
+                    avisou_pausa = False
+                processar_um(client)
         except Exception as e:  # noqa: BLE001 — loop nunca para por erro de rede
             print(f"Erro no loop do agente: {e}")
         time.sleep(INTERVALO_S)

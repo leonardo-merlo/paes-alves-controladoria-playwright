@@ -1,6 +1,14 @@
 """test_agente.py — testes do agente local. Rodar: python test_agente.py"""
 
-from agente import proximo_pendente, _resumo_para_status
+import tempfile
+from pathlib import Path
+
+from agente import (
+    NOME_ARQUIVO_PAUSA,
+    _resumo_para_status,
+    esta_pausado,
+    proximo_pendente,
+)
 
 
 def test_proximo_pendente_escolhe_mais_antigo():
@@ -43,6 +51,33 @@ def test_resumo_parcial():
     print("OK resumo_parcial")
 
 
+# ── pausa por máquina ─────────────────────────────────────────────
+# Serve para rodar as extracoes noutro computador sem que a maquina do Henrique
+# dispute os comandos. Precisa sobreviver a reinicio do Windows, por isso e um
+# arquivo em disco e nao um estado em memoria.
+
+def test_sem_arquivo_o_agente_trabalha():
+    with tempfile.TemporaryDirectory() as tmp:
+        assert esta_pausado(Path(tmp)) is False
+    print("OK pausa_ausente")
+
+
+def test_com_arquivo_o_agente_para():
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / NOME_ARQUIVO_PAUSA).write_text("pausado em 04/08", encoding="utf-8")
+        assert esta_pausado(Path(tmp)) is True
+    print("OK pausa_presente")
+
+
+def test_apagar_o_arquivo_religa():
+    with tempfile.TemporaryDirectory() as tmp:
+        alvo = Path(tmp) / NOME_ARQUIVO_PAUSA
+        alvo.write_text("x", encoding="utf-8")
+        alvo.unlink()
+        assert esta_pausado(Path(tmp)) is False
+    print("OK pausa_removida")
+
+
 if __name__ == "__main__":
     test_proximo_pendente_escolhe_mais_antigo()
     test_proximo_pendente_sem_pendentes_retorna_none()
@@ -50,4 +85,7 @@ if __name__ == "__main__":
     test_resumo_sucesso()
     test_resumo_tudo_falhou_eh_erro()
     test_resumo_parcial()
+    test_sem_arquivo_o_agente_trabalha()
+    test_com_arquivo_o_agente_para()
+    test_apagar_o_arquivo_religa()
     print("Todos os testes passaram.")

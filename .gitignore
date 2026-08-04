@@ -23,3 +23,6 @@ debug_outputs/
 
 # Logs de tarefas em background / saída do agente
 *.output
+
+# Pausa do agente — é por máquina, e precisa sobreviver ao atualizar.bat
+AGENTE-PAUSADO.txt
