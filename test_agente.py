@@ -51,6 +51,22 @@ def test_resumo_parcial():
     print("OK resumo_parcial")
 
 
+def test_resumo_anuncia_analise_recuperada():
+    # rascunho que a varredura salvou não é extração desta rodada, mas precisa
+    # aparecer: é processo que o Henrique já dava por visto e voltou a ter prazo.
+    _, msg = _resumo_para_status(
+        {"total": 1, "processados": 1, "erros": 0, "reanalisados": 2}
+    )
+    assert "2 análise(s) recuperada(s)" in msg
+    print("OK resumo_analise_recuperada")
+
+
+def test_resumo_sem_reanalise_nao_polui_mensagem():
+    _, msg = _resumo_para_status({"total": 1, "processados": 1, "erros": 0})
+    assert "recuperada" not in msg
+    print("OK resumo_sem_reanalise")
+
+
 # ── pausa por máquina ─────────────────────────────────────────────
 # Serve para rodar as extracoes noutro computador sem que a maquina do Henrique
 # dispute os comandos. Precisa sobreviver a reinicio do Windows, por isso e um
@@ -85,6 +101,8 @@ if __name__ == "__main__":
     test_resumo_sucesso()
     test_resumo_tudo_falhou_eh_erro()
     test_resumo_parcial()
+    test_resumo_anuncia_analise_recuperada()
+    test_resumo_sem_reanalise_nao_polui_mensagem()
     test_sem_arquivo_o_agente_trabalha()
     test_com_arquivo_o_agente_para()
     test_apagar_o_arquivo_religa()

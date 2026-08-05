@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from iniciar import main as executar_extracao
+from reanalisar import listar_sem_rascunho, reanalisar_um
 from supabase_writer import _get_client, _carregar_env
 
 INTERVALO_S = 3
@@ -124,6 +125,7 @@ def processar_um(client) -> bool:
     print(f"Comando recebido: {comando.get('acao')} ({cid[:8]})")
     try:
         resumo = asyncio.run(executar_extracao()) or {}
+        resumo["reanalisados"] = varrer_sem_rascunho(client)
         status, mensagem = _resumo_para_status(resumo)
         marcar(client, cid, status, mensagem)
         print(f"Comando {status}: {mensagem}")
@@ -134,6 +136,41 @@ def processar_um(client) -> bool:
     return True
 
 
+def varrer_sem_rascunho(client) -> int:
+    """
+    Reanalisa quem ficou 'processado' sem rascunho. Retorna quantos foram salvos.
+
+    Existe porque a extração é incremental: se a análise falha depois de os
+    documentos serem salvos (agente morre no meio, API fora do ar, resposta
+    truncada), o processo fica 'processado' e a rodada seguinte não acha documento
+    novo, conclui "nada novo" e segue. Ninguém repara — no painel ele aparece
+    pronto, sem prazo nenhum, que é o pior desfecho num controle de prazo.
+    Não abre navegador nem precisa de login: trabalha sobre o que já está no banco.
+    """
+    try:
+        alvos = listar_sem_rascunho(client)
+    except Exception as e:  # noqa: BLE001 — varredura não pode derrubar a rodada
+        print(f"Varredura de rascunhos: falhou ao listar ({e}) — seguindo.")
+        return 0
+
+    if not alvos:
+        return 0
+
+    print(f"\nVarredura: {len(alvos)} processo(s) sem rascunho — reanalisando...")
+    salvos = 0
+    for processo in alvos:
+        cnj = processo["numero_cnj"]
+        try:
+            resultado = reanalisar_um(client, processo)
+            print(f"  {cnj} — {resultado}")
+            # reanalisar_um devolve texto; só "OK" significa rascunho gravado
+            if resultado.startswith("OK"):
+                salvos += 1
+        except Exception as e:  # noqa: BLE001 — um processo ruim não para a lista
+            print(f"  {cnj} — ERRO na reanálise: {e}")
+    return salvos
+
+
 def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     """Traduz o resumo da extração em (status, mensagem) honestos para o app."""
     total = resumo.get("total", 0)
@@ -141,6 +178,7 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     n_err = resumo.get("erros", 0)
     n_rev = resumo.get("revisao_manual", 0)
     n_novo = resumo.get("nada_novo", 0)
+    n_rean = resumo.get("reanalisados", 0)
 
     # processo salvo sem análise não conta como erro, mas não pode passar em
     # silêncio: ele aparece no painel como pronto e sem prazo nenhum.
@@ -148,16 +186,19 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     # já estavam extraídos e não tinham documento novo: sucesso, mas não é
     # extração desta rodada — somar no total faria o painel inflar o número.
     novidade = f", {n_novo} sem novidade" if n_novo else ""
+    # análise recuperada de rodada anterior — não é extração desta, mas o Henrique
+    # precisa saber que apareceu rascunho novo em processo que ele já dava por visto.
+    recuperados = f" {n_rean} análise(s) recuperada(s)." if n_rean else ""
 
     if resumo.get("cdp_falhou"):
         return "erro", "Não foi possível abrir o navegador (CDP)."
     if total == 0:
-        return "concluido", "Nenhum processo pendente."
+        return "concluido", f"Nenhum processo pendente.{recuperados}"
     if n_ok == 0 and n_novo == 0:
         return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique."
     if n_err > 0:
-        return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{aviso}"
-    return "concluido", f"{n_ok} processado(s){novidade}.{aviso}"
+        return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{aviso}{recuperados}"
+    return "concluido", f"{n_ok} processado(s){novidade}.{aviso}{recuperados}"
 
 
 def main_loop() -> None:

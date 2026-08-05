@@ -444,6 +444,19 @@ async def extrair_processo(numero_cnj: str, data_corte: str | None = None, siste
         page = await encontrar_aba_pje(browser)
         page.set_default_timeout(TIMEOUT)
 
+        # O PJe recusa acesso por caixa de alerta do navegador ("acesso à íntegra dos
+        # autos ... somente mediante certificado digital"). Sem ouvinte, o Playwright
+        # fecha a caixa sozinho e a recusa fica invisível: a página não navega e o
+        # processo é reportado como 0 documentos — motivo errado para quem lê o painel.
+        # Com ouvinte registrado, fechar a caixa passa a ser responsabilidade nossa.
+        alertas: list[str] = []
+
+        def _capturar_alerta(dialog) -> None:
+            alertas.append(dialog.message)
+            asyncio.ensure_future(dialog.dismiss())
+
+        page.on("dialog", _capturar_alerta)
+
         sessao_ok = await verificar_sessao(page)
         if not sessao_ok:
             return {
@@ -457,6 +470,13 @@ async def extrair_processo(numero_cnj: str, data_corte: str | None = None, siste
 
         metadados = await extrair_metadados_timeline(page)
         documentos = await extrair_todos_documentos(page, data_corte=data_corte)
+
+        # nenhum documento e o PJe tendo avisado por que: o aviso é o motivo real
+        if not documentos and alertas:
+            return {
+                "erro":       f"PJe recusou o acesso: {alertas[-1]}",
+                "numero_cnj": numero_cnj,
+            }
 
         return {
             "sistema":             "pje",

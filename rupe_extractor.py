@@ -7,7 +7,8 @@ CNJ: J=8, TT=13 e origem=0000 (o "0000" marca o tribunal/2ª instância).
 
 Estratégia (descoberta por inspeção do DOM ao vivo) — evita os cliques AJAX frágeis:
 
-  1. "Meus Processos" tem link direto; navega-se direto na URL.
+  1. A Consulta de Processos tem link direto; navega-se direto na URL. Sem filtro de
+     localização — ver o comentário em CONSULTA_PROCESSOS.
   2. O painel de Pesquisa Avançada nasce recolhido — 1 clique no toggle renderiza o
      input. O número CNJ formatado funciona no campo.
   3. A lupa do resultado carrega o idProcesso no próprio onclick — extraído por regex,
@@ -46,10 +47,14 @@ PARSE_TIMEOUT_S = 30           # teto p/ extração de texto via PDF.js (maior p
 
 HOST = "pe.tjmg.jus.br"
 BASE = "https://pe.tjmg.jus.br"
-MEUS_PROCESSOS = (
-    f"{BASE}/rupe/portaljus/intranet/processo/processos.rupe"
-    "?acao=0&localizacaoAtual=862"
-)
+# Sem o "?acao=0&localizacaoAtual=862" que esta URL carregava até 05/08/2026: aquele
+# filtro prende a busca à caixa "Meus Processos", e recurso que subiu da 1ª instância
+# não está nela. Processos existentes e visíveis na mão voltavam como "nenhum
+# resultado" — 5004160-55.2023.8.13.0384 (85 peças) e 5003155-90.2024.8.13.0439 são
+# os casos que expuseram isso. Medido nos dois caminhos: com o filtro a lupa não
+# aparece para eles e aparece para 0145032-91.2026.8.13.0000 (número nativo de 2ª
+# instância); sem o filtro os três aparecem.
+CONSULTA_PROCESSOS = f"{BASE}/rupe/portaljus/intranet/processo/processos.rupe"
 VIEWER = (
     f"{BASE}/rupe/portaljus/intranet/processo/visualizadorPecasProcessuais/"
     "visualizadorPecasProcessuais.rupe?idProcesso={id}&visualizarPecasProcessoOrigem=false"
@@ -96,7 +101,7 @@ async def encontrar_aba_rupe(browser: Browser) -> Page:
 async def verificar_sessao(page: Page) -> bool:
     """Sessão viva = menu 'Meus Processos' acessível, sem redirecionamento p/ login."""
     try:
-        await page.goto(MEUS_PROCESSOS, wait_until="domcontentloaded")
+        await page.goto(CONSULTA_PROCESSOS, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
     except Exception:
         return False

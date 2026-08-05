@@ -247,7 +247,9 @@ async def processar_cnj(
 
         if resultado.get("erro"):
             erro_msg = resultado["erro"]
-            _permanente = ("sessao_expirada", "Nenhuma aba", "Não foi possível conectar")
+            # recusa de acesso não muda por insistência — retentar só repete o alerta
+            _permanente = ("sessao_expirada", "Nenhuma aba", "Não foi possível conectar",
+                           "recusou o acesso")
             eh_permanente = any(p in erro_msg for p in _permanente)
             if eh_permanente or tentativa == MAX_TENTATIVAS:
                 print(f"{prefixo} — ERRO extração: {erro_msg}")
