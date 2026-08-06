@@ -98,9 +98,28 @@ Ao lado das médias, sempre `média de N processos`. Sem isso o número não é
 interpretável: um processo de 84 documentos custa dezenas de vezes mais que um de 1,
 e a média de um mês com um processo gordo não se parece com a de um mês sem.
 
-**Quando não houver dado, mostrar `—`, nunca `US$ 0,00`.** Zero é uma afirmação falsa
-sobre um período que simplesmente não foi medido. Meses anteriores a esta mudança vão
-cair nesse caso.
+### Estado vazio — os quatro cartões aparecem sempre
+
+**Nenhum cartão é escondido por falta de dado.** Um número que some da tela é pior que
+um número vazio: quem olha não sabe se a métrica não existe, se quebrou, ou se ainda
+não foi medida.
+
+Sem dado, o cartão aparece zerado **e com a frase `dados ainda não coletados`** logo
+abaixo. É a frase que carrega a informação — sozinho, o zero seria uma afirmação falsa
+sobre um período que ninguém mediu.
+
+Três situações caem aqui, e todas são normais:
+
+1. **Agora** — custo e tempo ainda não existem em processo nenhum.
+2. **Meses anteriores** a esta mudança — nunca terão custo nem tempo.
+3. **Depois do reset do banco**, antes do teste real do Henrique — *nenhuma* das
+   quatro métricas terá dado. Este é o caso que mais importa: vai ser a primeira tela
+   que o Henrique vê. Precisa parecer um sistema esperando trabalho, não um sistema
+   quebrado.
+
+Consequência técnica: **taxa de extração com denominador zero** (nenhum processo
+tentado) não pode virar `NaN`, `Infinity` nem estourar. Zero processos → cartão zerado
+com a frase.
 
 ### Definições compartilhadas
 
@@ -170,6 +189,9 @@ do Leonardo antes do push, sempre.
 3. Uma extração real: conferir que `custo_usd` e `duracao_extracao_s` chegaram
    preenchidos nos processos daquela rodada, e vazios nos antigos.
 4. Painel local (`npm run dev`): taxa e contagem batendo com a tabela de baixo;
-   trocar o filtro de mês e ver os números acompanharem; um mês antigo mostrando `—`
-   e não zero.
-5. `npm run build` e `npm run lint` limpos antes de qualquer push.
+   trocar o filtro de mês e ver os números acompanharem; um mês antigo mostrando os
+   cartões zerados com `dados ainda não coletados`.
+5. **Ensaio do banco vazio** — com o filtro num mês sem processo nenhum, conferir que
+   os quatro cartões aparecem zerados, com a frase, e que a taxa não vira `NaN` com
+   denominador zero. É o ensaio da tela que o Henrique vai ver depois do reset.
+6. `npm run build` e `npm run lint` limpos antes de qualquer push.
