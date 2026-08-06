@@ -26,6 +26,10 @@ if _env_file.exists():
 
 CPC_DIR = Path("cpc")
 MODEL = "claude-haiku-4-5-20251001"
+# Preço do Haiku 4.5 por milhão de tokens, em dólar. Trocar de modelo sem mexer
+# aqui faz o custo gravado mentir — os dois andam juntos.
+PRECO_ENTRADA_POR_MILHAO_USD = 1.0
+PRECO_SAIDA_POR_MILHAO_USD = 5.0
 MAX_DOCS_PARA_ANALISE = 7  # documentos mais recentes enviados ao modelo (texto completo)
 # Teto de caracteres do bloco de documentos. O limite real é a janela do modelo
 # (200 mil tokens no Haiku 4.5); 320 mil caracteres ~ 80 mil tokens deixa folga
@@ -180,6 +184,21 @@ def _formatar_documentos(documentos: list[dict]) -> tuple[str, int]:
     return "\n\n".join(linhas), na_integra
 
 
+def calcular_custo_usd(tokens_entrada: int, tokens_saida: int) -> float:
+    """Custo em dólar de uma chamada. Função pura — ver test_analyzer.py."""
+    return (tokens_entrada / 1_000_000 * PRECO_ENTRADA_POR_MILHAO_USD) + (
+        tokens_saida / 1_000_000 * PRECO_SAIDA_POR_MILHAO_USD
+    )
+
+
+def anexar_uso(analise: dict, tokens_entrada: int, tokens_saida: int) -> dict:
+    """Acrescenta consumo e custo à análise. Função pura — ver test_analyzer.py."""
+    analise["tokens_entrada"] = tokens_entrada
+    analise["tokens_saida"] = tokens_saida
+    analise["custo_usd"] = calcular_custo_usd(tokens_entrada, tokens_saida)
+    return analise
+
+
 def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
     """Recebe o resultado da extração e retorna o JSON de análise do Claude."""
 
@@ -259,7 +278,8 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
             analise["modelo"] = MODEL
 
             u = message.usage
-            custo_usd = (u.input_tokens / 1_000_000 * 1) + (u.output_tokens / 1_000_000 * 5)
+            analise = anexar_uso(analise, u.input_tokens, u.output_tokens)
+            custo_usd = analise["custo_usd"]
             print(f"[TOKENS] input: {u.input_tokens:,} | output: {u.output_tokens:,} | total: {u.input_tokens + u.output_tokens:,} | custo: USD {custo_usd:.4f} (~R$ {custo_usd*5.7:.2f})")
             return analise
 
