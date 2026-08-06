@@ -1,6 +1,6 @@
 """test_runner.py — testes das decisões de desfecho da rodada. Rodar: python test_runner.py"""
 
-from runner import eh_nada_novo, eh_queda_de_sessao, eh_chrome_inacessivel
+from runner import duracao_segundos, eh_nada_novo, eh_queda_de_sessao, eh_chrome_inacessivel
 
 # mensagem real do Playwright quando o Chrome empilha abas demais e para de
 # responder — capturada na maquina do Henrique e reproduzida em 31/07/2026
@@ -60,6 +60,26 @@ def test_resultado_ausente_nao_e_chrome_inacessivel():
     print("OK chrome_resultado_ausente")
 
 
+# ── cronômetro por processo ───────────────────────────────────────
+# Alimenta a métrica de tempo médio no painel. Ver a spec de 2026-08-06.
+
+def test_duracao_arredonda_para_segundos_inteiros():
+    assert duracao_segundos(100.0, 112.4) == 12
+    print("OK duracao_arredonda")
+
+
+def test_duracao_nunca_e_negativa():
+    # relógio monotônico não anda para trás, mas gravar número negativo
+    # envenenaria a média no painel para sempre
+    assert duracao_segundos(200.0, 100.0) == 0
+    print("OK duracao_nao_negativa")
+
+
+def test_duracao_de_processo_instantaneo_e_zero():
+    assert duracao_segundos(50.0, 50.0) == 0
+    print("OK duracao_zero")
+
+
 if __name__ == "__main__":
     test_zero_documentos_em_extracao_incremental_nao_e_erro()
     test_zero_documentos_na_primeira_extracao_e_erro()
@@ -70,4 +90,7 @@ if __name__ == "__main__":
     test_timeout_de_cdp_e_chrome_inacessivel()
     test_sessao_expirada_nao_e_chrome_inacessivel()
     test_resultado_ausente_nao_e_chrome_inacessivel()
+    test_duracao_arredonda_para_segundos_inteiros()
+    test_duracao_nunca_e_negativa()
+    test_duracao_de_processo_instantaneo_e_zero()
     print("Todos os testes passaram.")

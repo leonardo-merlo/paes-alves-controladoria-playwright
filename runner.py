@@ -10,6 +10,7 @@ Uso:
 
 import asyncio
 import sys
+import time
 from collections import defaultdict
 from datetime import date, timezone, datetime
 from pathlib import Path
@@ -100,6 +101,24 @@ def marcar_supabase(ids: list[str], status: str, motivo: str | None = None) -> N
         # motivo da falha anterior — o painel passa a mentir sobre o estado atual.
         update["motivo_ignorado"] = None
     client.table("processos").update(update).in_("id", ids).execute()
+
+
+def gravar_duracao(cnj_id: str, segundos: int) -> None:
+    """Quanto tempo este processo levou. Uma linha por CNJ, não em lote."""
+    _carregar_env()
+    client = _get_client()
+    client.table("processos").update(
+        {"duracao_extracao_s": segundos}
+    ).eq("id", cnj_id).execute()
+
+
+def duracao_segundos(inicio: float, fim: float) -> int:
+    """
+    Segundos inteiros entre dois instantes de time.monotonic().
+    Função pura — ver test_runner.py. Nunca negativo: número negativo gravado
+    envenena a média do painel de forma silenciosa.
+    """
+    return max(0, round(fim - inicio))
 
 
 def eh_nada_novo(total_documentos: int, data_corte: str | None) -> bool:
@@ -221,6 +240,25 @@ def inserir_processos_pendentes(
 # ── processamento de um único CNJ ────────────────────────────────
 
 async def processar_cnj(
+    info: CNJInfo,
+    data_str: str,
+    prefixo: str,
+    data_corte: str | None = None,
+) -> dict | None:
+    """
+    Extrai e analisa um CNJ, cronometrado.
+
+    Mede todas as tentativas, inclusive as que falham: tempo gasto num processo que
+    deu erro é tempo real. Quais entram na média é decisão da interface, não daqui.
+    """
+    inicio = time.monotonic()
+    resultado = await _extrair_e_analisar(info, data_str, prefixo, data_corte=data_corte)
+    if isinstance(resultado, dict):
+        resultado["duracao_extracao_s"] = duracao_segundos(inicio, time.monotonic())
+    return resultado
+
+
+async def _extrair_e_analisar(
     info: CNJInfo,
     data_str: str,
     prefixo: str,
@@ -405,6 +443,11 @@ async def processar_por_sistema(
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
+
+            # antes das checagens abaixo de propósito: tentativa que morreu no meio
+            # também consumiu tempo. A próxima tentativa sobrescreve o valor.
+            if cnj_id and isinstance(resultado, dict) and "duracao_extracao_s" in resultado:
+                gravar_duracao(cnj_id, resultado["duracao_extracao_s"])
 
             if eh_chrome_inacessivel(resultado):
                 chrome_morreu = True
