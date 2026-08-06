@@ -149,18 +149,18 @@ def _upsert_documentos(client: Client, processo_id: str, documentos: list[dict],
         ).execute()
 
 
-def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
+def _montar_linha_rascunho(
+    processo_id: str, analise: dict, responsavel_id: str | None, data_extracao: str
+) -> dict:
     """
-    Insere ou atualiza o rascunho de análise no Supabase.
+    Monta a linha da tabela rascunhos a partir da análise.
+    Função pura — ver test_supabase_writer.py. Campos None são descartados, para
+    não sobrescrever com nulo o que já estava gravado.
     """
-    responsavel_nome = analise.get("responsavel_sugerido", "")
-    responsavel_map = _build_responsavel_map(client)
-    responsavel_id = responsavel_map.get(responsavel_nome.lower())
-
     data = {
         "processo_id":                processo_id,
         "status_sugerido":            analise.get("status_sugerido"),
-        "responsavel_sugerido":       responsavel_nome,        # texto — usado pelo app para exibição
+        "responsavel_sugerido":       analise.get("responsavel_sugerido", ""),  # texto — exibição
         "responsavel_sugerido_id":    responsavel_id,           # UUID — usado na aprovação
         "proxima_acao":               analise.get("proxima_acao"),
         "cenario_prazo":              analise.get("cenario_prazo"),
@@ -172,10 +172,27 @@ def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
         "modelo_ia":                  analise.get("modelo"),
         "documentos_analisados":      analise.get("total_documentos_analisados"),
         "documentos_enviados_modelo": analise.get("documentos_enviados_ao_modelo"),
-        "data_extracao":              datetime.now(timezone.utc).isoformat(),
+        "tokens_entrada":             analise.get("tokens_entrada"),
+        "tokens_saida":               analise.get("tokens_saida"),
+        "custo_usd":                  analise.get("custo_usd"),
+        "data_extracao":              data_extracao,
         "status":                     "pendente",
     }
-    data = {k: v for k, v in data.items() if v is not None}
+    return {k: v for k, v in data.items() if v is not None}
+
+
+def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
+    """
+    Insere ou atualiza o rascunho de análise no Supabase.
+    """
+    responsavel_nome = analise.get("responsavel_sugerido", "")
+    responsavel_map = _build_responsavel_map(client)
+    responsavel_id = responsavel_map.get(responsavel_nome.lower())
+
+    data = _montar_linha_rascunho(
+        processo_id, analise, responsavel_id,
+        datetime.now(timezone.utc).isoformat(),
+    )
 
     # verificar se já existe rascunho pendente para esse processo
     existente = (
