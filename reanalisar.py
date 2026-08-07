@@ -16,15 +16,13 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from analyzer import analisar_processo
+from analyzer import analisar_processo, STATUS_SUGERIDOS
 from supabase_writer import _get_client, _carregar_env, _upsert_rascunho
 
-# processos.status_atual tem CHECK próprio, mais estreito que o de
-# rascunhos.status_sugerido. Escrever um valor de fora da lista derruba o update.
-STATUS_ATUAL_ACEITOS = {
-    "PENDENTE", "EM_ANDAMENTO", "ARQUIVADO", "CONTESTACAO",
-    "SENTENCA_ACORDO", "EXECUCAO", "AGUARDAR", "MANIFESTAR",
-}
+# processos.status_atual aceita os mesmos atos que o modelo pode sugerir, mais os
+# três estados de ciclo de vida, que não vêm da IA. Escrever um valor de fora da
+# lista derruba o update.
+STATUS_ATUAL_ACEITOS = {"PENDENTE", "EM_ANDAMENTO", "ARQUIVADO", *STATUS_SUGERIDOS}
 
 
 def listar_sem_rascunho(client) -> list[dict]:

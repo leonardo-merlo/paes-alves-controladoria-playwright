@@ -25,6 +25,36 @@ if _env_file.exists():
             os.environ[_k.strip()] = _v.strip()
 
 CPC_DIR = Path("cpc")
+
+# Os status que o modelo pode sugerir. Precisa ser idêntico ao CHECK de
+# rascunhos.status_sugerido no banco e à lista do seletor no app — um status que
+# só exista aqui quebra a gravação; um que só exista lá o modelo nunca sugere, e
+# o Henrique tem de corrigir à mão todo dia sem saber por quê.
+# Ordem: os cinco de uso diário primeiro, recursos depois, atos avulsos no fim.
+STATUS_SUGERIDOS = [
+    "CONTESTACAO",
+    "SENTENCA_ACORDO",
+    "EXECUCAO",
+    "AGUARDAR",
+    "MANIFESTAR",
+    "APELACAO",
+    "AGRAVO_INSTRUMENTO",
+    "EMBARGOS_DECLARACAO",
+    "RECURSO_ESPECIAL",
+    "RECURSO_EXTRAORDINARIO",
+    "CONTRARRAZOES",
+    "CONTRARRAZOES_RECURSO_ADESIVO",
+    "REPLICA",
+    "ALEGACOES_FINAIS",
+    "PETICAO",
+    "PETICAO_PROVAS",
+    "COMPROVAR_HIPOSSUFICIENCIA",
+    "EMENDA_INICIAL",
+    "JUNTAR_DOCUMENTOS",
+    "CUMPRIMENTO_SENTENCA",
+    "CIENCIA",
+]
+
 MODEL = "claude-haiku-4-5-20251001"
 # Preço do Haiku 4.5 por milhão de tokens, em dólar. Trocar de modelo sem mexer
 # aqui faz o custo gravado mentir — os dois andam juntos.
@@ -92,7 +122,7 @@ DOCUMENTOS (mais recente primeiro):
 Retorne APENAS este JSON (sem texto antes ou depois):
 {{
   "nosso_polo": "ATIVO|PASSIVO",
-  "status_sugerido": "CONTESTACAO|SENTENCA_ACORDO|EXECUCAO|AGUARDAR|MANIFESTAR",
+  "status_sugerido": "{status_opcoes}",
   "responsavel_sugerido": "{responsaveis_opcoes}",
   "proxima_acao": "PROTOCOLAR X até DD/MM/AAAA (prazo interno: DD/MM/AAAA) OU AGUARDAR — motivo",
   "cenario_prazo": "EXPLICITO|VIA_ARTIGO|INFERIDO",
@@ -103,10 +133,32 @@ Retorne APENAS este JSON (sem texto antes ou depois):
   "classificacao_risco": "BAIXO|MEDIO|ALTO|CRITICO"
 }}
 
-Regras de status_sugerido:
-- CONTESTACAO / SENTENCA_ACORDO / EXECUCAO: quando há ato processual a protocolar pelo NOSSO polo.
-- AGUARDAR: quando NÃO há ato a protocolar agora (o prazo corrente é da parte contrária, ou aguarda-se audiência/decisão). Nesse caso proxima_acao começa com "AGUARDAR — " e cita o próximo marco/data. NÃO invente prazo nosso que não existe; deixe prazo_fatal_dias_uteis null.
-- MANIFESTAR: quando cabe uma manifestação nossa sem ser contestação/réplica (ex.: manifestar sobre conciliação, sobre documento juntado, ciência com prazo).
+Regras de status_sugerido — escolha o ato processual MAIS ESPECÍFICO que couber. Só use
+MANIFESTAR ou PETICAO quando nenhum dos específicos descrever o ato:
+- AGUARDAR: NÃO há ato a protocolar agora — o prazo corrente é da parte contrária, ou
+  aguarda-se audiência/decisão. proxima_acao começa com "AGUARDAR — " e cita o próximo
+  marco/data. NÃO invente prazo nosso que não existe; deixe prazo_fatal_dias_uteis null.
+- CONTESTACAO: defesa do réu, quando somos o polo PASSIVO.
+- REPLICA: resposta do autor à contestação.
+- ALEGACOES_FINAIS: memoriais após encerrada a instrução.
+- SENTENCA_ACORDO: sentença publicada ou acordo homologado, sem recurso definido ainda.
+- EXECUCAO: atos de execução de título extrajudicial.
+- CUMPRIMENTO_SENTENCA: execução de título judicial após o trânsito em julgado.
+- APELACAO: recurso contra sentença.
+- AGRAVO_INSTRUMENTO: recurso contra decisão interlocutória.
+- EMBARGOS_DECLARACAO: omissão, contradição, obscuridade ou erro material na decisão.
+- RECURSO_ESPECIAL: cabimento ao STJ, instâncias ordinárias esgotadas.
+- RECURSO_EXTRAORDINARIO: cabimento ao STF, matéria constitucional.
+- CONTRARRAZOES: resposta a recurso da parte contrária.
+- CONTRARRAZOES_RECURSO_ADESIVO: contrarrazões quando também cabe recurso adesivo nosso.
+- EMENDA_INICIAL: despacho determina corrigir ou completar a petição inicial.
+- JUNTAR_DOCUMENTOS: determinação de juntar documento específico.
+- COMPROVAR_HIPOSSUFICIENCIA: determinação de comprovar o direito à gratuidade.
+- PETICAO_PROVAS: intimação para especificar as provas que se pretende produzir.
+- CIENCIA: apenas tomar ciência, sem nada a protocolar, mas com registro devido.
+- MANIFESTAR: manifestação nossa que não se encaixa em nenhum ato acima (ex.: manifestar
+  sobre proposta de conciliação, sobre documento juntado pela outra parte).
+- PETICAO: último recurso — há petição a protocolar e nenhum rótulo acima serve.
 
 Regras de responsável: use exatamente o primeiro nome como listado acima. Regra geral: gestor → CONTESTACAO, advogados → SENTENCA_ACORDO ou EXECUCAO conforme o caso. prazo_interno = fatal - 3. alerta obrigatório quando cenario_prazo = INFERIDO."""
 
@@ -239,6 +291,7 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
         documentos_formatados=docs_formatados,
         responsaveis_lista=responsaveis_lista,
         responsaveis_opcoes=responsaveis_opcoes,
+        status_opcoes="|".join(STATUS_SUGERIDOS),
     )
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
