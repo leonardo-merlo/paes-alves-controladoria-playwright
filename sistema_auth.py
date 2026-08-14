@@ -9,7 +9,21 @@ import urllib.request
 import urllib.parse
 from typing import Callable, Awaitable
 
-CDP_URL = "http://localhost:9222"
+# 127.0.0.1 e não "localhost", de propósito. `localhost` resolve para ::1 E para
+# 127.0.0.1, e quando existem dois Chrome na 9222 cada um fica com uma pilha: o
+# primeiro pega 127.0.0.1, o segundo sobra com ::1. Aí quem responde depende de
+# qual endereço o cliente escolher — medido em 14/08 nesta máquina, urllib e
+# Playwright foram os dois para ::1 e falaram com o Chrome errado. Fixar o IPv4
+# faz o agente sempre falar com o primeiro Chrome, que é o do watchdog.
+CDP_URL = "http://127.0.0.1:9222"
+
+# Caminho do Chrome e perfil ÚNICO da extração. Mora aqui porque iniciar.py,
+# preparar.py e o agente-watchdog.bat precisam concordar: perfis diferentes na
+# mesma porta significam que o segundo Chrome não sobe o CDP e suas abas ficam
+# invisíveis para o agente — foi o que quebrou a rodada de 14/08.
+CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+CHROME_PROFILE = r"C:\ChromeControladoria"
+CDP_PORT = 9222
 
 # URL base de cada sistema para abrir no Chrome
 SISTEMA_URLS = {
@@ -178,6 +192,22 @@ async def verificar_autenticacoes(sistemas: list[str]) -> dict[str, bool]:
     return status
 
 
+def abrir_aba_cdp(url: str) -> bool:
+    """
+    Abre uma aba no Chrome que já está na porta de debug. Devolve se conseguiu.
+
+    O endpoint /json/new exige PUT desde o Chrome 111 — a chamada antiga era um
+    GET (urlopen sem `data` manda GET) e voltava 405 em qualquer Chrome atual.
+    O erro era engolido com um aviso, e o agente seguia sem aba nenhuma.
+    """
+    req = urllib.request.Request(f"{CDP_URL}/json/new?{url}", method="PUT")
+    try:
+        urllib.request.urlopen(req, timeout=5).close()
+        return True
+    except Exception:
+        return False
+
+
 async def abrir_abas_para_auth(sistemas_nao_autenticados: list[str]) -> None:
     """
     Abre uma aba no Chrome para cada sistema que precisa de login,
@@ -195,11 +225,10 @@ async def abrir_abas_para_auth(sistemas_nao_autenticados: list[str]) -> None:
         if any(host in aba.get("url", "") for aba in abas_existentes):
             print(f"  Aba já aberta: {sistema}")
             continue
-        try:
-            urllib.request.urlopen(f"{CDP_URL}/json/new?{url}", timeout=2).close()
+        if abrir_aba_cdp(url):
             print(f"  Aba aberta: {url}")
-        except Exception as e:
-            print(f"  Aviso: erro ao abrir aba {sistema} — {e}")
+        else:
+            print(f"  Aviso: não consegui abrir a aba de {sistema}")
             print(f"  Abra manualmente: {url}")
 
 

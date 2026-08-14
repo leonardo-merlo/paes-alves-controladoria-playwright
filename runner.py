@@ -133,10 +133,21 @@ def eh_nada_novo(total_documentos: int, data_corte: str | None) -> bool:
 
 
 def eh_queda_de_sessao(resultado: dict | None) -> bool:
-    """A sessão do sistema morreu — todo CNJ seguinte da fila vai falhar igual."""
+    """
+    O sistema não está pronto — todo CNJ seguinte da fila vai falhar igual.
+
+    Duas formas do mesmo desfecho. `sessao_expirada` é a aba aberta e deslogada.
+    "Nenhuma aba" é não haver aba nenhuma daquele sistema no Chrome do agente —
+    que é o estado normal antes de o operador logar, não um erro do processo.
+    Sem a segunda, cada CNJ virava `erro_browser` individualmente e o sistema
+    era dado como resolvido, matando as 3 retentativas de 5/10/15 min: em 14/08
+    a fila do eProc, TRF6 e RUPE (15 CNJs) foi queimada em 15 segundos, antes de
+    o Henrique ter chance de digitar a senha.
+    """
     if not resultado:
         return False
-    return "sessao_expirada" in str(resultado.get("erro") or "")
+    erro = str(resultado.get("erro") or "")
+    return "sessao_expirada" in erro or "Nenhuma aba" in erro
 
 
 def eh_chrome_inacessivel(resultado: dict | None) -> bool:

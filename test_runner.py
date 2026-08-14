@@ -34,6 +34,28 @@ def test_sessao_expirada_e_queda_de_sessao():
     print("OK sessao_expirada")
 
 
+def test_nenhuma_aba_e_queda_de_sessao():
+    # mensagens reais gravadas em motivo_ignorado na rodada de 14/08/2026, quando
+    # as abas foram abertas numa segunda instância do Chrome, invisível ao agente.
+    # Tratar como erro do processo queimava a fila inteira antes do login.
+    assert eh_queda_de_sessao(
+        {"erro": "Nenhuma aba do eProc (eproc1g.tjmg.jus.br) encontrada no Chrome conectado"}
+    ) is True
+    assert eh_queda_de_sessao(
+        {"erro": "Nenhuma aba do RUPE (pe.tjmg.jus.br) encontrada no Chrome conectado"}
+    ) is True
+    print("OK nenhuma_aba")
+
+
+def test_nenhuma_aba_nao_e_chrome_inacessivel():
+    # o CDP respondeu — o que faltou foi aba do sistema. Confundir os dois mandava
+    # o operador fechar o Chrome quando bastava logar.
+    assert eh_chrome_inacessivel(
+        {"erro": "Nenhuma aba do eProc (eproc1g.tjmg.jus.br) encontrada no Chrome conectado"}
+    ) is False
+    print("OK nenhuma_aba_nao_e_chrome")
+
+
 def test_erro_de_extracao_comum_nao_e_queda_de_sessao():
     assert eh_queda_de_sessao({"erro": "sem_documentos"}) is False
     print("OK erro_comum")
@@ -85,6 +107,8 @@ if __name__ == "__main__":
     test_zero_documentos_na_primeira_extracao_e_erro()
     test_documentos_novos_nao_sao_nada_novo()
     test_sessao_expirada_e_queda_de_sessao()
+    test_nenhuma_aba_e_queda_de_sessao()
+    test_nenhuma_aba_nao_e_chrome_inacessivel()
     test_erro_de_extracao_comum_nao_e_queda_de_sessao()
     test_resultado_ausente_nao_e_queda_de_sessao()
     test_timeout_de_cdp_e_chrome_inacessivel()

@@ -26,7 +26,7 @@ para depuração — veja as seções abaixo.
 
 **Windows:**
 ```
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=C:\chrome-debug
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=C:\ChromeControladoria
 ```
 
 **Mac:**
@@ -38,6 +38,10 @@ para depuração — veja as seções abaixo.
 
 > Depois de abrir, logar normalmente no PJE (com OTP se necessário).
 > Deixar esse Chrome aberto enquanto o script roda.
+
+> **Um Chrome só na 9222.** Dois Chrome na mesma porta ficam com uma pilha cada
+> (127.0.0.1 e ::1) e o agente passa a falar com um deles por sorteio — foi o que
+> quebrou a rodada de 14/08. Se já houver Chrome de extração aberto, use ele.
 
 ---
 

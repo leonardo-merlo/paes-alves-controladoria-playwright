@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from playwright.async_api import async_playwright, Browser, Page, Playwright
 
-CDP_URL = "http://localhost:9222"
+CDP_URL = "http://127.0.0.1:9222"
 PJE_URL = "https://pje.tjmg.jus.br/pje/Processo/ConsultaProcesso/listView.seam"
 TIMEOUT = 20_000
 MAX_DOCS = 300
@@ -35,7 +35,7 @@ async def conectar_cdp() -> tuple[Playwright, Browser]:
     except Exception as e:
         raise RuntimeError(
             f"Não foi possível conectar ao Chrome via CDP ({CDP_URL}): {e}\n"
-            "Abra o Chrome com: chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\chrome-debug"
+            "Abra o Chrome com: chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\ChromeControladoria"
         )
 
 

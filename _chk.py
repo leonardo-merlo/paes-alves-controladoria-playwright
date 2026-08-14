@@ -1,6 +1,6 @@
 import asyncio
 from playwright.async_api import async_playwright
-CDP_URL="http://localhost:9222"
+CDP_URL="http://127.0.0.1:9222"
 async def main():
     async with async_playwright() as p:
         b=await p.chromium.connect_over_cdp(CDP_URL)

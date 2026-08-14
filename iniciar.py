@@ -18,12 +18,16 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from cnj_router import rotear
 from runner import modo_supabase
-from sistema_auth import _get_abas_chrome, SISTEMA_HOST
+from sistema_auth import (
+    _get_abas_chrome,
+    abrir_aba_cdp,
+    CHROME_PATH,
+    CHROME_PROFILE,
+    CDP_PORT,
+    SISTEMA_HOST,
+)
 from supabase_writer import _get_client, _carregar_env
 
-CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-CHROME_DEBUG_DIR = r"C:\chrome-debug"
-CDP_PORT = 9222
 CDP_URL = f"http://localhost:{CDP_PORT}"
 
 
@@ -91,22 +95,26 @@ async def main() -> dict:
 
     chrome_de_pe = bool(_get_abas_chrome())
     if chrome_de_pe:
+        # Chrome de pé = as abas que faltam entram NELE, via CDP. Chamar o
+        # chrome.exe aqui subia uma SEGUNDA instância, e as duas ficavam
+        # escutando a 9222 em pilhas diferentes: a primeira em 127.0.0.1, a
+        # segunda em ::1 (medido em 14/08). Com `localhost` resolvendo para as
+        # duas, qual Chrome respondia virava sorteio — o agente conferia as abas
+        # num e extraía do outro, e falhava com "Nenhuma aba encontrada".
+        # Foi o que queimou 15 CNJs na rodada de 14/08.
         print("Chrome já aberto — conferindo quais abas faltam:")
-        urls = _urls_que_faltam(urls_por_sistema)
+        for url in _urls_que_faltam(urls_por_sistema):
+            if not abrir_aba_cdp(url):
+                print(f"  Aviso: não consegui abrir — abra manualmente: {url}")
     else:
         print(f"Abrindo Chrome com {len(urls_por_sistema)} aba(s):")
         for sistema, url in urls_por_sistema.items():
             print(f"  {sistema}: {url}")
-        urls = list(urls_por_sistema.values())
-
-    # com o Chrome de pé e nenhuma aba faltando, chamar o chrome.exe só serviria
-    # para empilhar aba — que é exatamente o que trava o navegador.
-    if urls or not chrome_de_pe:
         subprocess.Popen([
             CHROME_PATH,
             f"--remote-debugging-port={CDP_PORT}",
-            f"--user-data-dir={CHROME_DEBUG_DIR}",
-            *urls,
+            f"--user-data-dir={CHROME_PROFILE}",
+            *urls_por_sistema.values(),
         ])
 
     if not await _aguardar_cdp_pronto():

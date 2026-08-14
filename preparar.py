@@ -12,10 +12,7 @@ import subprocess
 import sys
 from supabase_writer import _get_client, _carregar_env
 from cnj_router import rotear
-
-CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-CHROME_DEBUG_DIR = r"C:\chrome-debug"
-CDP_PORT = 9222
+from sistema_auth import CHROME_PATH, CHROME_PROFILE, CDP_PORT
 
 
 def main() -> None:
@@ -57,7 +54,7 @@ def main() -> None:
     cmd = [
         CHROME_PATH,
         f"--remote-debugging-port={CDP_PORT}",
-        f"--user-data-dir={CHROME_DEBUG_DIR}",
+        f"--user-data-dir={CHROME_PROFILE}",
         *urls,
     ]
     subprocess.Popen(cmd)

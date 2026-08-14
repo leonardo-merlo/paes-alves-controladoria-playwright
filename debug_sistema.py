@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from playwright.async_api import async_playwright, Page
 
-CDP_URL    = "http://localhost:9222"
+CDP_URL    = "http://127.0.0.1:9222"
 OUTPUT_DIR = Path("debug_outputs")
 
 SISTEMAS_CONHECIDOS = {
@@ -228,7 +228,7 @@ async def main() -> None:
             browser = await p.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
             print(f"Erro ao conectar ao Chrome: {e}")
-            print("Abra o Chrome com: chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\chrome-debug")
+            print("Abra o Chrome com: chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\ChromeControladoria")
             return
 
         print(f"Chrome conectado. {len(browser.contexts)} contexto(s).\n")
