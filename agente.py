@@ -37,10 +37,48 @@ NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
 LIMITE_RODADA_ABANDONADA_MIN = 90
 
 
+# Trechos que aparecem quando a máquina está sem rede. O agente sobe junto com o
+# Windows, antes de o Wi-Fi conectar, e passa alguns minutos sem conseguir falar
+# com o Supabase — situação normal, não defeito.
+ERROS_DE_REDE = (
+    "getaddrinfo failed",
+    "11001",
+    "Name or service not known",
+    "Temporary failure in name resolution",
+    "Max retries exceeded",
+    "Connection aborted",
+    "Connection reset",
+    "10054",
+)
+
+
 def esta_pausado(pasta: Path | None = None) -> bool:
     """Esta máquina foi colocada em pausa? Ver NOME_ARQUIVO_PAUSA."""
     base = pasta or Path(__file__).parent
     return (base / NOME_ARQUIVO_PAUSA).exists()
+
+
+def resumir_erro_do_loop(erro: str) -> str:
+    """
+    Vira a linha que aparece na janela do agente. Função pura — ver test_agente.py.
+
+    Falha de rede recebe texto de gente: quem olha essa janela é o Henrique, e
+    "getaddrinfo failed" não diz nada para ele.
+    """
+    if any(marca in erro for marca in ERROS_DE_REDE):
+        return "Sem conexão com a internet — aguardando a rede voltar..."
+    return f"Erro no loop do agente: {erro}"
+
+
+def deve_imprimir(mensagem: str, ultima_mensagem: str | None) -> bool:
+    """
+    Só imprime quando a mensagem muda. Função pura — ver test_agente.py.
+
+    Sem isto, uma falha que se repete a cada 3s vira parede de texto: em 15/08 a
+    janela do Henrique encheu de erro de rede repetido e pareceu que o agente
+    tinha quebrado, quando ele estava só esperando o Wi-Fi subir.
+    """
+    return mensagem != ultima_mensagem
 
 
 def proximo_pendente(comandos: list[dict]) -> dict | None:
@@ -206,6 +244,7 @@ def main_loop() -> None:
     client = _get_client()
     print("Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
     avisou_pausa = False
+    ultimo_aviso: str | None = None
     while True:
         try:
             if esta_pausado():
@@ -218,8 +257,14 @@ def main_loop() -> None:
                     print("\nAgente religado. Aguardando comandos...\n")
                     avisou_pausa = False
                 processar_um(client)
+            if ultimo_aviso is not None:
+                print("Conexão restabelecida. Aguardando comandos...")
+                ultimo_aviso = None
         except Exception as e:  # noqa: BLE001 — loop nunca para por erro de rede
-            print(f"Erro no loop do agente: {e}")
+            aviso = resumir_erro_do_loop(str(e))
+            if deve_imprimir(aviso, ultimo_aviso):
+                print(aviso)
+                ultimo_aviso = aviso
         time.sleep(INTERVALO_S)
 
 

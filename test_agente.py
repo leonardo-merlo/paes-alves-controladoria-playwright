@@ -6,8 +6,10 @@ from pathlib import Path
 from agente import (
     NOME_ARQUIVO_PAUSA,
     _resumo_para_status,
+    deve_imprimir,
     esta_pausado,
     proximo_pendente,
+    resumir_erro_do_loop,
 )
 
 
@@ -94,7 +96,44 @@ def test_apagar_o_arquivo_religa():
     print("OK pausa_removida")
 
 
+# ── janela do agente: erro de rede não vira parede de texto ───────
+
+def test_erro_de_rede_vira_texto_de_gente():
+    # mensagem real capturada na máquina do Henrique em 15/08/2026
+    erro = "[Errno 11001] getaddrinfo failed"
+    assert resumir_erro_do_loop(erro) == "Sem conexão com a internet — aguardando a rede voltar..."
+    print("OK erro_rede_traduzido")
+
+
+def test_conexao_derrubada_tambem_conta_como_rede():
+    assert "internet" in resumir_erro_do_loop("WinError 10054 Connection reset by peer")
+    print("OK conexao_derrubada")
+
+
+def test_erro_desconhecido_aparece_inteiro():
+    # erro que não é de rede não pode ser escondido — é diagnóstico
+    assert resumir_erro_do_loop("KeyError: 'numero_cnj'") == "Erro no loop do agente: KeyError: 'numero_cnj'"
+    print("OK erro_desconhecido_visivel")
+
+
+def test_erro_repetido_imprime_uma_vez_so():
+    msg = "Sem conexão com a internet — aguardando a rede voltar..."
+    assert deve_imprimir(msg, None) is True
+    assert deve_imprimir(msg, msg) is False
+    print("OK erro_repetido_calado")
+
+
+def test_erro_diferente_volta_a_imprimir():
+    assert deve_imprimir("Erro no loop do agente: outro", "Sem conexão com a internet — aguardando a rede voltar...") is True
+    print("OK erro_novo_aparece")
+
+
 if __name__ == "__main__":
+    test_erro_de_rede_vira_texto_de_gente()
+    test_conexao_derrubada_tambem_conta_como_rede()
+    test_erro_desconhecido_aparece_inteiro()
+    test_erro_repetido_imprime_uma_vez_so()
+    test_erro_diferente_volta_a_imprimir()
     test_proximo_pendente_escolhe_mais_antigo()
     test_proximo_pendente_sem_pendentes_retorna_none()
     test_resumo_nada_pendente()
