@@ -30,6 +30,61 @@ agente, com backfill.
 
 ---
 
+### Certificado digital: 3 processos do PJe sem acesso
+
+**Onde:** nada em código. É configuração da máquina do Henrique.
+
+**O quê:** o PJe recusa a íntegra dos autos a advogado não vinculado, exigindo
+login com certificado. Três processos falham por isso a cada rodada, com a
+mensagem correta gravada em `motivo_ignorado`.
+
+**Por que assim:** decisão do Leonardo em 16/08 — o erro já diz o motivo exato,
+que é o suficiente para o Henrique agir. Além disso, o sistema **nunca faz
+login**: ele reusa a sessão aberta na mão. Logo, isto não é engenharia, é
+configuração e rotina.
+
+**O que precisa acontecer, quando for a hora:**
+1. Instalar a extensão do assinador no perfil `C:\ChromeControladoria` — o
+   provável tropeço, porque esse perfil é separado do Chrome do dia a dia e
+   extensão não passa de um para outro.
+2. O token (pendrive A3) precisa estar plugado durante a rodada.
+3. O PIN é digitado pelo Henrique. Não automatizar: é credencial, e o desenho
+   atual (ele loga, o robô reusa a sessão) já é o certo.
+4. Sessão com certificado costuma cair mais rápido — vira um passo a mais na
+   rotina dele, não uma feature.
+
+**O que NÃO fazer:** apontar a extração para o perfil normal do Chrome dele.
+Resolveria a extensão de graça, mas o robô passaria a abrir e fechar abas no
+navegador de trabalho, e o histórico de 14/08 mostra que mexer em perfil nesta
+porta custa caro.
+
+---
+
+### `skill-cowork-cnj.md` não descreve o que a skill realmente faz
+
+**Onde:** `skill-cowork-cnj.md`, na raiz deste repo.
+
+**O quê:** o arquivo não menciona a coluna `sistema` em lugar nenhum — só CNJ,
+vara, comarca, polos e classe. Mas a skill que roda na máquina do Henrique grava
+`sistema` em todo processo: medido em 16/08, os 67 do banco tinham `pje` (43),
+`eproc_tjmg` (9), `pje_tjmg_2inst` (7), `eproc_trf6` (6) e `pje_2g` (2).
+
+São **cinco valores para o mesmo conjunto pequeno**, misturando dois
+vocabulários: rótulos genéricos (`pje`, `eproc`), um apelido só dela (`pje_2g`) e
+nomes internos do roteador (`eproc_trf6`, `pje_tjmg_2inst`). `pje_2g` e
+`pje_tjmg_2inst` são o mesmo sistema escrito de dois jeitos.
+
+**Por que importa:** esse rótulo é palpite tirado do texto da Vara, e o roteador
+existe justamente para poder recusá-lo (ver `rotear`). Enquanto o documento não
+descrever a regra, ninguém consegue dizer se um palpite errado veio de defeito da
+skill ou de e-mail sem informação suficiente.
+
+**O que fazer quando for a hora:** abrir a skill no Cowork, ler a regra que
+realmente está lá, trazer para este arquivo e reduzir a um vocabulário só —
+de preferência o do `cnj_router`.
+
+---
+
 ### A ação `iniciar` sobrevive só por compatibilidade
 
 **Onde:** `ACOES` em `agente.py` e a lista equivalente em
