@@ -23,10 +23,17 @@ def test_federal_trf6_com_digito_6_continua_no_trf6():
 
 
 def test_rotulo_nao_atravessa_tribunal():
-    # TRF1 rotulado 'pje_2g' pela skill do Gmail ia parar no RUPE, que é do TJMG
-    info = rotear("1001571-06.2020.4.01.3821", "pje_2g")
-    assert info.sistema.startswith("nao_mapeado"), info.sistema
-    assert info.implementado is False
+    # Processo federal rotulado 'pje_2g' pela skill do Gmail ia parar no RUPE,
+    # que é do TJMG. O que este teste guarda é isso — o rótulo não atravessa
+    # tribunal —, e não "não tem extrator": ele afirmava as duas coisas juntas
+    # porque em 15/08 elas coincidiam. Desde 16/08 a origem mineira tem destino
+    # (TRF6), então a segunda afirmação deixou de valer para este número.
+    for cnj in ("1001571-06.2020.4.01.3821", "1001571-06.2020.4.01.9999"):
+        info = rotear(cnj, "pje_2g")
+        assert info.sistema != "pje_tjmg_2inst", info.sistema
+        assert not info.sistema.startswith("pje_"), info.sistema
+    # sem origem conhecida continua sem destino nenhum
+    assert rotear("1001571-06.2020.4.01.9999", "pje_2g").implementado is False
     print("OK rotulo_nao_atravessa_tribunal")
 
 
@@ -64,21 +71,53 @@ def test_cnj_invalido_nao_explode():
 
 
 def test_nome_de_sistema_nao_mapeado_mostra_o_tribunal():
-    # o TRF1 não tem extrator; dizer "nao_mapeado_J4_TT01" no painel não ajuda
-    # ninguém, mas "tribunal 4.01" dá ao Henrique a pista do número
-    assert nome_sistema("nao_mapeado_J4_TT01") == "tribunal 4.01"
+    # na Justiça Federal o código do tribunal é o número do TRF — dizer
+    # "nao_mapeado_J4_TT03" ou "tribunal 4.03" no painel não ajuda ninguém
+    assert nome_sistema("nao_mapeado_J4_TT03") == "TRF3"
+    assert nome_sistema("nao_mapeado_J8_TT26") == "tribunal 8.26"
     assert nome_sistema("pje_tjmg_2inst") == "RUPE (TJMG 2ª inst.)"
     print("OK nome_sistema")
 
 
+def test_processo_mineiro_antigo_vai_para_o_trf6():
+    # numerado 4.01 porque é de 2020, antes de o TRF6 existir; a unidade (origem
+    # 3821, Muriaé) é mineira e hoje quem cuida dela é o TRF6. Medido em 16/08:
+    # o processo está lá, com 6 documentos.
+    info = rotear("1001571-06.2020.4.01.3821")
+    assert info.sistema == "eproc_trf6"
+    assert info.implementado is True
+    print("OK mineiro_antigo_trf6")
+
+
+def test_rotulo_do_email_nao_desvia_o_mineiro_antigo():
+    # o e-mail rotulou 'pje_2g' por ler "Turma Recursal"; acertou a instância e
+    # errou o tribunal — o RUPE é do TJMG
+    assert rotear("1001571-06.2020.4.01.3821", "pje_2g").sistema == "eproc_trf6"
+    print("OK mineiro_antigo_ignora_rotulo")
+
+
+def test_trf1_de_outro_estado_continua_sem_extrator():
+    # o TRF1 ainda cobre 13 estados; só Minas migrou para o TRF6. Origem
+    # desconhecida não pode ser chutada para lá.
+    info = rotear("1001571-06.2020.4.01.9999")
+    assert info.sistema == "nao_mapeado_J4_TT01"
+    assert info.implementado is False
+    print("OK trf1_outro_estado")
+
+
 def test_sistema_pelo_numero_ignora_o_rotulo_do_email():
-    # é o que o painel usa para dizer "pelo número, parece X": sem hint nenhum
-    assert rotear("1001571-06.2020.4.01.3821").sistema == "nao_mapeado_J4_TT01"
+    # é o que o painel usa para dizer "pelo número, parece X": sem hint nenhum.
+    # Origem 9999 não é mineira, então segue TRF1 sem extrator — o caso de Muriaé
+    # mudou de desfecho, ver test_processo_mineiro_antigo_vai_para_o_trf6.
+    assert rotear("1001571-06.2020.4.01.9999").sistema == "nao_mapeado_J4_TT01"
     assert rotear("2817393-23.2026.8.13.0000").sistema == "pje_tjmg_2inst"
     print("OK sistema_pelo_numero")
 
 
 if __name__ == "__main__":
+    test_processo_mineiro_antigo_vai_para_o_trf6()
+    test_rotulo_do_email_nao_desvia_o_mineiro_antigo()
+    test_trf1_de_outro_estado_continua_sem_extrator()
     test_nome_de_sistema_nao_mapeado_mostra_o_tribunal()
     test_sistema_pelo_numero_ignora_o_rotulo_do_email()
     test_processo_federal_trf6_nao_vai_para_o_eproc_estadual()

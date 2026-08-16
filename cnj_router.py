@@ -39,6 +39,21 @@ URLS = {
 
 IMPLEMENTADOS = {"pje_tjmg", "eproc_tjmg", "eproc_trf6", "eproc_trf6_2g", "pje_tjmg_2inst"}
 
+# Unidades da Justiça Federal em Minas Gerais, pela origem (4 últimos dígitos do
+# CNJ). O TRF6 foi criado em 2022 e assumiu Minas, que até então era do TRF1 —
+# então processo mineiro antigo nasceu numerado 4.01 e hoje quem cuida dele é o
+# TRF6. A origem identifica a UNIDADE e não muda com a criação do tribunal.
+#
+# Medido em 16/08/2026: a origem 3821 (Vara Cível e JEF Adjunto de Muriaé)
+# aparece nos dois — 4.01 em 2020, 4.06 de 2023 em diante — e o processo
+# 1001571-06.2020.4.01.3821 foi encontrado no eProc do TRF6 com 6 documentos,
+# depois de uma rodada inteira dado como "sistema não implementado".
+#
+# Lista curta de propósito: só entra origem com evidência. Unidade mineira ainda
+# não vista continua caindo em "sem extrator", igual a hoje — nada piora, e o
+# painel agora mostra "TRF1", que é a pista para alguém reparar.
+ORIGENS_JF_MINAS = {"3821"}  # Muriaé
+
 # Como cada sistema se chama para quem não é programador. Aparece na janela do
 # agente e no painel. O espelho disto em TypeScript vive em lib/cnj.ts do painel —
 # mexeu aqui, mexa lá.
@@ -54,12 +69,20 @@ NOME_SISTEMA = {
 
 
 def nome_sistema(sistema: str) -> str:
-    """Nome legível do sistema. `nao_mapeado_J4_TT01` vira 'tribunal 4.01'."""
+    """
+    Nome legível do sistema. `nao_mapeado_J4_TT01` vira 'TRF1'.
+
+    Na Justiça Federal o código do tribunal É o número do TRF, então dá para
+    nomear sem tabela. "tribunal 4.01" não dizia nada a quem lê o painel.
+    """
     if sistema in NOME_SISTEMA:
         return NOME_SISTEMA[sistema]
     m = re.match(r"^nao_mapeado_J(\d)_TT(\d{2})$", sistema)
     if m:
-        return f"tribunal {m.group(1)}.{m.group(2)}"
+        segmento, tribunal = m.group(1), m.group(2)
+        if segmento == "4":
+            return f"TRF{int(tribunal)}"
+        return f"tribunal {segmento}.{tribunal}"
     return sistema
 
 # A que tribunal cada sistema pertence. Serve para impedir que o rótulo vindo do
@@ -124,6 +147,9 @@ def rotear(numero_cnj: str, sistema_hint: str | None = None) -> CNJInfo:
         # 1002485-27.2023.4.06.3821 para o eProc ESTADUAL — processo federal
         # procurado no tribunal de Minas, que nunca ia achar. Errou 3x por
         # rodada, em três rodadas seguidas, até ser medido em 15/08/2026.
+        sistema_base = "eproc_trf6"
+    elif chave == ("4", "01") and origem in ORIGENS_JF_MINAS:
+        # Processo mineiro numerado antes de o TRF6 existir. Ver ORIGENS_JF_MINAS.
         sistema_base = "eproc_trf6"
 
     if not sistema_base:
