@@ -39,7 +39,11 @@ from sistema_auth import (
 )
 from supabase_writer import _get_client, _carregar_env
 
-CDP_URL = f"http://localhost:{CDP_PORT}"
+# 127.0.0.1 e não "localhost", pelo mesmo motivo do sistema_auth.py (ver o
+# comentário longo lá). Este arquivo ficou para trás no commit c029469: a espera
+# do CDP aqui perguntava por `localhost` enquanto a leitura das abas perguntava
+# por 127.0.0.1 — as duas checagens podiam responder por Chrome diferentes.
+CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
 
 def _coletar_urls_pendentes() -> dict[str, str]:
