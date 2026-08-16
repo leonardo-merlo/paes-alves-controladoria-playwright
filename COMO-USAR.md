@@ -20,6 +20,21 @@ No Windows também dá pra dar duplo-clique em `iniciar.bat`.
 O fluxo manual em duas etapas (`preparar.py` + `runner.py`) continua disponível
 para depuração — veja as seções abaixo.
 
+### Em dois tempos: abrir, logar com calma, extrair
+
+```bash
+python iniciar.py --abrir     # abre o Chrome nas abas dos sistemas e para aí
+python iniciar.py --extrair   # extrai, assumindo que você já logou
+```
+
+É o mesmo que o painel faz nos botões "Abrir sistemas" e "Iniciar extração".
+Serve para o eProc, o TRF6 e o RUPE, em que não há como saber pela tela se o
+login foi feito: no comando único eles eram tentados no instante em que o Chrome
+abria e gastavam tentativa à toa. Separado, o login não tem relógio correndo.
+
+Se algum sistema ainda estiver deslogado na hora do `--extrair`, a fila dele
+volta para `pendente` sem queimar processo — basta logar e rodar de novo.
+
 ---
 
 ## 1. Abrir o Chrome com CDP habilitado

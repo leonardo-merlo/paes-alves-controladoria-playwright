@@ -4,13 +4,45 @@ import tempfile
 from pathlib import Path
 
 from agente import (
+    ACOES,
     NOME_ARQUIVO_PAUSA,
+    _resumo_abertura_para_status,
     _resumo_para_status,
     deve_imprimir,
     esta_pausado,
     proximo_pendente,
     resumir_erro_do_loop,
 )
+
+
+def test_acao_antiga_continua_valida():
+    # o painel velho só sabe mandar 'iniciar'; um agente atualizado antes dele
+    # não pode recusar o único comando que o Henrique consegue disparar hoje
+    assert "iniciar" in ACOES
+    print("OK acao_iniciar_preservada")
+
+
+def test_abertura_diz_o_que_fazer_agora():
+    status, msg = _resumo_abertura_para_status(
+        {"sistemas": ["pje_tjmg_2inst", "pje_tjmg"], "cdp_falhou": False}
+    )
+    assert status == "concluido"
+    assert "RUPE" in msg and "PJe TJMG" in msg
+    # a mensagem existe para dizer ao Henrique qual é o próximo passo dele
+    assert "Iniciar extração" in msg
+    print("OK abertura_ok")
+
+
+def test_abertura_sem_pendente_nao_pede_login():
+    status, msg = _resumo_abertura_para_status({"sistemas": [], "cdp_falhou": False})
+    assert status == "concluido" and "Nenhum processo pendente" in msg
+    print("OK abertura_sem_pendente")
+
+
+def test_abertura_sem_chrome_e_erro():
+    status, _ = _resumo_abertura_para_status({"sistemas": ["pje_tjmg"], "cdp_falhou": True})
+    assert status == "erro"
+    print("OK abertura_cdp_falhou")
 
 
 def test_proximo_pendente_escolhe_mais_antigo():
@@ -129,6 +161,10 @@ def test_erro_diferente_volta_a_imprimir():
 
 
 if __name__ == "__main__":
+    test_acao_antiga_continua_valida()
+    test_abertura_diz_o_que_fazer_agora()
+    test_abertura_sem_pendente_nao_pede_login()
+    test_abertura_sem_chrome_e_erro()
     test_erro_de_rede_vira_texto_de_gente()
     test_conexao_derrubada_tambem_conta_como_rede()
     test_erro_desconhecido_aparece_inteiro()

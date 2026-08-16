@@ -2,8 +2,8 @@
 agente.py — Agente local da controladoria.
 
 Fica rodando na máquina do operador, consultando a tabela `comandos` no Supabase
-a cada poucos segundos. Quando encontra um comando 'iniciar' pendente, executa o
-fluxo de extração (iniciar.py) e grava o resultado de volta no Supabase.
+a cada poucos segundos. Quando encontra um comando pendente, executa a ação dele
+(ver ACOES) e grava o resultado de volta no Supabase.
 
 Não abre portas nem recebe conexões: só consulta o Supabase de tempos em tempos.
 
@@ -17,11 +17,34 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from iniciar import main as executar_extracao
+from cnj_router import nome_sistema
+from iniciar import abrir_sistemas, extrair, main as executar_extracao
 from reanalisar import listar_sem_rascunho, reanalisar_um
 from supabase_writer import _get_client, _carregar_env
 
 INTERVALO_S = 3
+
+# As ações que o painel pode mandar.
+#
+# `iniciar` é o fluxo antigo — abre, espera o login e extrai, tudo num clique. Ele
+# continua existindo intacto de propósito: um agente novo tem de entender o painel
+# velho, e um painel novo, o agente velho. Só assim a atualização das duas pontas
+# pode acontecer em dias diferentes sem deixar o Henrique sem sistema no meio.
+#
+# `abrir_sistemas` e `extrair` são o mesmo fluxo em dois tempos, que é o que
+# resolve o problema: com o login separado, ninguém tenta extrair antes da hora.
+ACAO_INICIAR = "iniciar"
+ACAO_ABRIR = "abrir_sistemas"
+ACAO_EXTRAIR = "extrair"
+ACOES = (ACAO_INICIAR, ACAO_ABRIR, ACAO_EXTRAIR)
+
+# O que aparece no painel enquanto a ação roda. Quem lê é o Henrique, então cada
+# uma diz o que ele deve fazer agora — não o que o programa está fazendo.
+MENSAGEM_INICIAL = {
+    ACAO_INICIAR: "Abrindo navegador. Faça login nos sistemas.",
+    ACAO_ABRIR: "Abrindo os sistemas. Faça login com calma — nada começa sozinho.",
+    ACAO_EXTRAIR: "Extraindo os processos...",
+}
 
 # Enquanto este arquivo existir na pasta, o agente ignora comandos novos. Serve
 # para tirar uma máquina do ar — por exemplo, rodar as extrações noutro
@@ -156,15 +179,28 @@ def processar_um(client) -> bool:
         return False
 
     cid = comando["id"]
+    acao = comando.get("acao") or ACAO_INICIAR
     # Camada (a): só segue se conseguir reivindicar o comando atomicamente.
-    if not reivindicar(client, cid, "Abrindo navegador. Faça login nos sistemas."):
+    if not reivindicar(client, cid, MENSAGEM_INICIAL.get(acao, "Executando...")):
         return False
 
-    print(f"Comando recebido: {comando.get('acao')} ({cid[:8]})")
+    print(f"Comando recebido: {acao} ({cid[:8]})")
     try:
-        resumo = asyncio.run(executar_extracao()) or {}
-        resumo["reanalisados"] = varrer_sem_rascunho(client)
-        status, mensagem = _resumo_para_status(resumo)
+        if acao not in ACOES:
+            # Painel mais novo que o agente: dizer isso é melhor do que rodar uma
+            # extração que ninguém pediu, e melhor do que deixar o comando pendente
+            # para sempre travando a fila.
+            marcar(client, cid, "erro",
+                   f"Ação '{acao}' desconhecida — atualize o agente (atualizar.bat).")
+            print(f"Comando erro: ação desconhecida '{acao}'")
+            return True
+
+        if acao == ACAO_ABRIR:
+            status, mensagem = _resumo_abertura_para_status(asyncio.run(abrir_sistemas()) or {})
+        else:
+            resumo = asyncio.run(extrair() if acao == ACAO_EXTRAIR else executar_extracao()) or {}
+            resumo["reanalisados"] = varrer_sem_rascunho(client)
+            status, mensagem = _resumo_para_status(resumo)
         marcar(client, cid, status, mensagem)
         print(f"Comando {status}: {mensagem}")
     except Exception as e:  # noqa: BLE001 — agente não pode morrer por um comando
@@ -207,6 +243,17 @@ def varrer_sem_rascunho(client) -> int:
         except Exception as e:  # noqa: BLE001 — um processo ruim não para a lista
             print(f"  {cnj} — ERRO na reanálise: {e}")
     return salvos
+
+
+def _resumo_abertura_para_status(resumo: dict) -> tuple[str, str]:
+    """Traduz o resultado de `abrir_sistemas` em (status, mensagem) para o painel."""
+    sistemas = resumo.get("sistemas") or []
+    if resumo.get("cdp_falhou"):
+        return "erro", "Não foi possível abrir o navegador (CDP)."
+    if not sistemas:
+        return "concluido", "Nenhum processo pendente — nada a abrir."
+    nomes = ", ".join(nome_sistema(s) for s in sistemas)
+    return "concluido", f"Abri {nomes}. Faça login e clique em Iniciar extração."
 
 
 def _resumo_para_status(resumo: dict) -> tuple[str, str]:

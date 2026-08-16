@@ -1,12 +1,23 @@
 """
-iniciar.py — Comando único: abre o Chrome nos sistemas necessários e, assim que
-o login é detectado, dispara a extração automaticamente. Sem Enter, sem segundo
-comando.
+iniciar.py — Abre o Chrome nos sistemas necessários e extrai.
 
-Substitui o par preparar.py + runner.py para o uso do dia a dia.
+Três entradas, para os três comandos que o painel pode mandar:
+
+  abrir_sistemas()  abre o Chrome e as abas, e para aí. O login é feito com calma,
+                    sem nenhum relógio correndo.
+  extrair()         extrai assumindo que os logins já foram feitos.
+  main()            os dois colados, com detecção de login no meio — é o
+                    comportamento antigo, e continua sendo o do `iniciar`.
+
+O par separado existe porque os sistemas sem detecção de login (eProc, TRF6,
+RUPE) eram tentados no instante em que o Chrome abria, falhavam porque ninguém
+tinha logado ainda, e gastavam uma das 4 tentativas à toa. Em 15/08 o RUPE gastou
+as 4 assim e ficou de fora da rodada inteira.
 
 Uso:
-  python iniciar.py
+  python iniciar.py           # abre, espera o login e extrai
+  python iniciar.py --abrir   # só abre os sistemas
+  python iniciar.py --extrair # só extrai, assumindo login feito
 """
 
 import asyncio
@@ -17,7 +28,7 @@ import urllib.request
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from cnj_router import rotear
-from runner import modo_supabase
+from runner import modo_supabase, ordenar_sistemas, MODO_AUTO, MODO_ASSUMIR_LOGADO
 from sistema_auth import (
     _get_abas_chrome,
     abrir_aba_cdp,
@@ -87,12 +98,38 @@ async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -
     return False
 
 
-async def main() -> dict:
+async def abrir_sistemas() -> dict:
+    """
+    Abre o Chrome e as abas dos sistemas com processo pendente, e para aí.
+
+    Não extrai nada e não espera login: quem loga é o operador, no tempo dele. O
+    eProc e o RUPE ainda pedem um código que chega por e-mail — qualquer relógio
+    correndo aqui só serviria para queimar tentativa.
+    """
     urls_por_sistema = _coletar_urls_pendentes()
     if not urls_por_sistema:
-        print("Nenhum processo pendente. Nada a fazer.")
-        return {"total": 0, "processados": 0, "erros": 0}
+        print("Nenhum processo pendente. Nada a abrir.")
+        return {"sistemas": [], "cdp_falhou": False}
 
+    sistemas = ordenar_sistemas(list(urls_por_sistema.keys()))
+    if not await _abrir_abas(urls_por_sistema):
+        return {"sistemas": sistemas, "cdp_falhou": True}
+    return {"sistemas": sistemas, "cdp_falhou": False}
+
+
+async def extrair() -> dict:
+    """
+    Extrai assumindo que os logins já foram feitos (pela ação `abrir_sistemas`).
+
+    Sem detecção de login e sem espera: cada sistema é tentado uma vez. Se algum
+    ainda estiver deslogado, o runner devolve a fila dele para 'pendente' sem
+    queimar processo — basta logar e mandar extrair de novo.
+    """
+    return await modo_supabase(MODO_ASSUMIR_LOGADO)
+
+
+async def _abrir_abas(urls_por_sistema: dict[str, str]) -> bool:
+    """Garante Chrome de pé com uma aba por sistema. Devolve se o CDP respondeu."""
     chrome_de_pe = bool(_get_abas_chrome())
     if chrome_de_pe:
         # Chrome de pé = as abas que faltam entram NELE, via CDP. Chamar o
@@ -119,11 +156,28 @@ async def main() -> dict:
 
     if not await _aguardar_cdp_pronto():
         print("Não foi possível conectar ao Chrome (CDP). Verifique se ele abriu.")
+        return False
+    return True
+
+
+async def main() -> dict:
+    """Abre, observa o login e extrai — o comportamento do comando `iniciar`."""
+    urls_por_sistema = _coletar_urls_pendentes()
+    if not urls_por_sistema:
+        print("Nenhum processo pendente. Nada a fazer.")
+        return {"total": 0, "processados": 0, "erros": 0}
+
+    if not await _abrir_abas(urls_por_sistema):
         return {"total": 0, "processados": 0, "erros": 0, "cdp_falhou": True}
 
-    # modo_auto=True: observa o login e dispara a extração sozinho.
-    return await modo_supabase(modo_auto=True)
+    # MODO_AUTO: observa o login e dispara a extração sozinho.
+    return await modo_supabase(MODO_AUTO)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if "--abrir" in sys.argv:
+        asyncio.run(abrir_sistemas())
+    elif "--extrair" in sys.argv:
+        asyncio.run(extrair())
+    else:
+        asyncio.run(main())

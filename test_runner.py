@@ -1,6 +1,12 @@
 """test_runner.py — testes das decisões de desfecho da rodada. Rodar: python test_runner.py"""
 
-from runner import duracao_segundos, eh_nada_novo, eh_queda_de_sessao, eh_chrome_inacessivel
+from runner import (
+    duracao_segundos,
+    eh_chrome_inacessivel,
+    eh_nada_novo,
+    eh_queda_de_sessao,
+    ordenar_sistemas,
+)
 
 # mensagem real do Playwright quando o Chrome empilha abas demais e para de
 # responder — capturada na maquina do Henrique e reproduzida em 31/07/2026
@@ -102,7 +108,31 @@ def test_duracao_de_processo_instantaneo_e_zero():
     print("OK duracao_zero")
 
 
+def test_rupe_vai_na_frente():
+    # a sessão do RUPE cai antes das outras: ser o último da fila é o que mais
+    # tempo deixa ela envelhecendo
+    assert ordenar_sistemas(["pje_tjmg", "eproc_tjmg", "pje_tjmg_2inst"]) == [
+        "pje_tjmg_2inst", "pje_tjmg", "eproc_tjmg",
+    ]
+    print("OK rupe_na_frente")
+
+
+def test_sem_rupe_a_ordem_nao_muda():
+    # reordenar o que não precisa só tornaria a rodada difícil de comparar
+    assert ordenar_sistemas(["pje_tjmg", "eproc_tjmg"]) == ["pje_tjmg", "eproc_tjmg"]
+    print("OK ordem_estavel")
+
+
+def test_rupe_sozinho_continua_sozinho():
+    assert ordenar_sistemas(["pje_tjmg_2inst"]) == ["pje_tjmg_2inst"]
+    assert ordenar_sistemas([]) == []
+    print("OK rupe_sozinho")
+
+
 if __name__ == "__main__":
+    test_rupe_vai_na_frente()
+    test_sem_rupe_a_ordem_nao_muda()
+    test_rupe_sozinho_continua_sozinho()
     test_zero_documentos_em_extracao_incremental_nao_e_erro()
     test_zero_documentos_na_primeira_extracao_e_erro()
     test_documentos_novos_nao_sao_nada_novo()

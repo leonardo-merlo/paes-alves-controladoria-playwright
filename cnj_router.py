@@ -39,6 +39,29 @@ URLS = {
 
 IMPLEMENTADOS = {"pje_tjmg", "eproc_tjmg", "eproc_trf6", "eproc_trf6_2g", "pje_tjmg_2inst"}
 
+# Como cada sistema se chama para quem não é programador. Aparece na janela do
+# agente e no painel. O espelho disto em TypeScript vive em lib/cnj.ts do painel —
+# mexeu aqui, mexa lá.
+NOME_SISTEMA = {
+    "pje_tjmg":       "PJe TJMG",
+    "pje_tjmg_2inst": "RUPE (TJMG 2ª inst.)",
+    "eproc_tjmg":     "eProc TJMG",
+    "pje_tjrj":       "PJe TJRJ",
+    "eproc_trf2":     "eProc TRF2",
+    "eproc_trf6":     "eProc JFMG (1ª inst.)",
+    "eproc_trf6_2g":  "eProc TRF6 (2ª inst.)",
+}
+
+
+def nome_sistema(sistema: str) -> str:
+    """Nome legível do sistema. `nao_mapeado_J4_TT01` vira 'tribunal 4.01'."""
+    if sistema in NOME_SISTEMA:
+        return NOME_SISTEMA[sistema]
+    m = re.match(r"^nao_mapeado_J(\d)_TT(\d{2})$", sistema)
+    if m:
+        return f"tribunal {m.group(1)}.{m.group(2)}"
+    return sistema
+
 # A que tribunal cada sistema pertence. Serve para impedir que o rótulo vindo do
 # e-mail atravesse um processo de um tribunal para outro — ver `rotear`.
 TRIBUNAL_DO_SISTEMA = {

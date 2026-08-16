@@ -1,6 +1,6 @@
 """test_cnj_router.py — testes do roteamento por número CNJ. Rodar: python test_cnj_router.py"""
 
-from cnj_router import rotear
+from cnj_router import rotear, nome_sistema
 
 
 # ── casos reais que falharam na máquina do Henrique em 15/08/2026 ──
@@ -63,7 +63,24 @@ def test_cnj_invalido_nao_explode():
     print("OK cnj_invalido")
 
 
+def test_nome_de_sistema_nao_mapeado_mostra_o_tribunal():
+    # o TRF1 não tem extrator; dizer "nao_mapeado_J4_TT01" no painel não ajuda
+    # ninguém, mas "tribunal 4.01" dá ao Henrique a pista do número
+    assert nome_sistema("nao_mapeado_J4_TT01") == "tribunal 4.01"
+    assert nome_sistema("pje_tjmg_2inst") == "RUPE (TJMG 2ª inst.)"
+    print("OK nome_sistema")
+
+
+def test_sistema_pelo_numero_ignora_o_rotulo_do_email():
+    # é o que o painel usa para dizer "pelo número, parece X": sem hint nenhum
+    assert rotear("1001571-06.2020.4.01.3821").sistema == "nao_mapeado_J4_TT01"
+    assert rotear("2817393-23.2026.8.13.0000").sistema == "pje_tjmg_2inst"
+    print("OK sistema_pelo_numero")
+
+
 if __name__ == "__main__":
+    test_nome_de_sistema_nao_mapeado_mostra_o_tribunal()
+    test_sistema_pelo_numero_ignora_o_rotulo_do_email()
     test_processo_federal_trf6_nao_vai_para_o_eproc_estadual()
     test_federal_trf6_com_digito_6_continua_no_trf6()
     test_rotulo_nao_atravessa_tribunal()

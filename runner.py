@@ -30,6 +30,21 @@ MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
 MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
 MOTIVO_LOGIN_PENDENTE = "Login ainda não estava feito quando a extração tentou"
 
+# Como a rodada trata o login. Eram dois valores num booleano (`modo_auto`) e
+# passaram a ser três quando "abrir os sistemas" virou um comando separado de
+# "extrair" — ver docs/handoff-2026-08-16-separar-login-e-painel.md.
+MODO_INTERATIVO = "interativo"       # abre as abas e espera Enter no terminal
+MODO_AUTO = "auto"                   # observa o Chrome e dispara sozinho
+MODO_ASSUMIR_LOGADO = "assumir_logado"  # o login já foi feito, vai direto
+MODOS = (MODO_INTERATIVO, MODO_AUTO, MODO_ASSUMIR_LOGADO)
+
+# Quem é logado primeiro é quem mais tempo passa parado esperando a vez. A sessão
+# do RUPE cai antes das outras, então ela vai na frente: com os logins todos
+# feitos ANTES da extração (ver a ação `abrir_sistemas`), a diferença entre ser o
+# primeiro e ser o último da fila pode ser meia hora de sessão envelhecendo.
+# Os que não estão listados mantêm a ordem em que chegaram.
+PRIORIDADE_SISTEMAS = ["pje_tjmg_2inst"]
+
 
 # ── helpers locais ────────────────────────────────────────────────
 
@@ -119,6 +134,20 @@ def duracao_segundos(inicio: float, fim: float) -> int:
     envenena a média do painel de forma silenciosa.
     """
     return max(0, round(fim - inicio))
+
+
+def ordenar_sistemas(sistemas: list[str]) -> list[str]:
+    """
+    Em que ordem os sistemas são extraídos. Função pura — ver test_runner.py.
+
+    Antes a ordem saía de `list(por_sistema.keys())`, que segue a `data_entrada`
+    dos CNJs — acidental, portanto. Ver PRIORIDADE_SISTEMAS para o porquê do RUPE
+    na frente. Estável no resto: reordenar o que não precisa só tornaria a rodada
+    difícil de comparar com a de ontem.
+    """
+    prioritarios = [s for s in PRIORIDADE_SISTEMAS if s in sistemas]
+    restantes = [s for s in sistemas if s not in prioritarios]
+    return prioritarios + restantes
 
 
 def eh_nada_novo(total_documentos: int, data_corte: str | None) -> bool:
@@ -371,7 +400,7 @@ async def processar_por_sistema(
     data_str: str,
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
-    modo_auto: bool = False,
+    modo: str = MODO_INTERATIVO,
 ) -> tuple[list[str], list[str], list[tuple[str, str]], list[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
@@ -414,7 +443,7 @@ async def processar_por_sistema(
         print("Nenhum CNJ para processar.")
         return [], [], [], []
 
-    sistemas_necessarios = list(por_sistema.keys())
+    sistemas_necessarios = ordenar_sistemas(list(por_sistema.keys()))
     ids_ok: list[str] = []
     ids_erro: list[str] = []
     ids_revisao: list[tuple[str, str]] = []
@@ -494,7 +523,7 @@ async def processar_por_sistema(
         print()
         return True
 
-    if modo_auto:
+    if modo == MODO_AUTO:
         processados = await monitorar_logins_e_processar(sistemas_necessarios, _processar_sistema)
         nao_processados = [s for s in sistemas_necessarios if s not in processados]
         if ids_map and nao_processados:
@@ -510,12 +539,25 @@ async def processar_por_sistema(
                 ids_timeout, "pendente",
                 "Login não concluído dentro do tempo — nenhuma sessão ativa nas tentativas",
             )
-    else:
+    elif modo == MODO_ASSUMIR_LOGADO:
+        # O login foi feito antes, por outro comando, com o tempo que precisasse.
+        # Não existe máquina de retentativa aqui de propósito: se ainda faltar
+        # sessão, o primeiro CNJ de cada sistema falha e _processar_sistema
+        # devolve a fila inteira para 'pendente' sem queimar processo nenhum.
+        print(f"Extraindo direto (logins já feitos): {', '.join(sistemas_necessarios)}\n")
+        for sistema in sistemas_necessarios:
+            await _processar_sistema(sistema)
+    elif modo == MODO_INTERATIVO:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
         if not ok:
             return [], [], [], []
         for sistema in sistemas_necessarios:
             await _processar_sistema(sistema)
+    else:
+        # Cair no interativo por engano seria pior do que estourar: ele chama
+        # input(), e o agente não tem terminal — ficaria pendurado até alguém
+        # notar que a rodada nunca termina.
+        raise ValueError(f"Modo desconhecido: {modo!r} (esperado um de {MODOS})")
 
     # ids de CNJs não implementados → ignorado
     if ids_map:
@@ -527,7 +569,7 @@ async def processar_por_sistema(
 
 # ── modos de execução ─────────────────────────────────────────────
 
-async def modo_supabase(modo_auto: bool = False) -> dict:
+async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     """Processa os pendentes do Supabase. Retorna resumo {total, processados, erros}."""
     pendentes = ler_cnjs_supabase()
     if not pendentes:
@@ -548,7 +590,7 @@ async def modo_supabase(modo_auto: bool = False) -> dict:
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
     ids_ok, ids_erro, ids_revisao, ids_nada_novo = await processar_por_sistema(
-        cnjs, data_str, ids_map, corte_map, modo_auto=modo_auto
+        cnjs, data_str, ids_map, corte_map, modo=modo
     )
     print(f"ids_ok={ids_ok}")
     print(f"ids_erro={ids_erro}")
