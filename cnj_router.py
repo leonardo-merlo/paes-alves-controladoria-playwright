@@ -113,6 +113,27 @@ class CNJInfo:
     erro: str | None = None
 
 
+def motivo_sem_extrator(numero_cnj: str) -> str:
+    """
+    O que gravar em `motivo_ignorado` quando não há extrator. Função pura.
+
+    Existe porque "Sistema não implementado" é um beco sem saída: quem lê fecha a
+    tela e segue. O processo 1001571-06.2020.4.01.3821 passou rodadas assim, e
+    estava o tempo todo no eProc do TRF6 — a mensagem é que não dizia isso.
+    Para o TRF1 a mensagem passa a ensinar a conferência, com a origem na mão.
+    """
+    info = rotear(numero_cnj)
+    nome = nome_sistema(info.sistema)
+    if info.tribunal == "01" and info.segmento == SEGMENTO["4"]:
+        return (
+            f"{nome} não tem extrator. Se este processo for mineiro e anterior a "
+            f"2022, ele provavelmente está no eProc do TRF6 — o TRF6 assumiu Minas "
+            f"naquele ano. Confira lá e, se estiver, avise: basta acrescentar a "
+            f"origem {info.origem} na lista de unidades mineiras."
+        )
+    return f"Sistema não implementado ({nome})"
+
+
 def rotear(numero_cnj: str, sistema_hint: str | None = None) -> CNJInfo:
     numero_cnj = numero_cnj.strip()
     m = CNJ_PATTERN.match(numero_cnj)

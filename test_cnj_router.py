@@ -1,6 +1,6 @@
 """test_cnj_router.py — testes do roteamento por número CNJ. Rodar: python test_cnj_router.py"""
 
-from cnj_router import rotear, nome_sistema
+from cnj_router import rotear, nome_sistema, motivo_sem_extrator
 
 
 # ── casos reais que falharam na máquina do Henrique em 15/08/2026 ──
@@ -79,6 +79,24 @@ def test_nome_de_sistema_nao_mapeado_mostra_o_tribunal():
     print("OK nome_sistema")
 
 
+def test_mensagem_do_trf1_ensina_a_conferir_o_trf6():
+    # "Sistema não implementado" é beco sem saída: quem lê fecha a tela. O de
+    # Muriaé passou rodadas assim e estava no TRF6 o tempo todo.
+    msg = motivo_sem_extrator("1001571-06.2020.4.01.9999")
+    assert "TRF1" in msg
+    assert "TRF6" in msg
+    assert "9999" in msg  # a origem, que é o que ele precisa me passar
+    print("OK mensagem_trf1")
+
+
+def test_mensagem_de_outro_tribunal_continua_curta():
+    # só o TRF1 tem a história do TRF6; inventar isso para o TJRJ seria ruído
+    msg = motivo_sem_extrator("1000000-00.2024.8.19.0001")
+    assert "TRF6" not in msg
+    assert "Sistema não implementado" in msg
+    print("OK mensagem_outro_tribunal")
+
+
 def test_processo_mineiro_antigo_vai_para_o_trf6():
     # numerado 4.01 porque é de 2020, antes de o TRF6 existir; a unidade (origem
     # 3821, Muriaé) é mineira e hoje quem cuida dela é o TRF6. Medido em 16/08:
@@ -115,6 +133,8 @@ def test_sistema_pelo_numero_ignora_o_rotulo_do_email():
 
 
 if __name__ == "__main__":
+    test_mensagem_do_trf1_ensina_a_conferir_o_trf6()
+    test_mensagem_de_outro_tribunal_continua_curta()
     test_processo_mineiro_antigo_vai_para_o_trf6()
     test_rotulo_do_email_nao_desvia_o_mineiro_antigo()
     test_trf1_de_outro_estado_continua_sem_extrator()

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from analyzer import analisar_processo
-from cnj_router import rotear_lista, CNJInfo
+from cnj_router import rotear_lista, motivo_sem_extrator, CNJInfo
 from extrator_dispatch import obter_extrator, esta_implementado, descricao_pendente
 from sistema_auth import preparar_autenticacao, monitorar_logins_e_processar
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
@@ -204,6 +204,45 @@ def motivo_do_erro(resultado: dict | None) -> str:
     detalhe = str(resultado.get("mensagem") or "").strip()
     texto = f"{erro} — {detalhe}" if detalhe else erro
     return texto[:400]
+
+
+# Do texto cru do erro para uma frase curta. A ordem importa: a primeira que
+# casar vence, então o específico vem antes do genérico.
+# Espelha as categorias do painel (app/dashboard/erros.ts) de propósito — as duas
+# pontas descrevem a mesma rodada e não podem discordar na frente do Henrique.
+CATEGORIAS_MOTIVO: list[tuple[str, str]] = [
+    ("certificado digital", "os processos exigem certificado digital"),
+    ("recusou o acesso", "o sistema recusou o acesso"),
+    ("não localizado", "os processos não foram encontrados"),
+    ("Tabela de eventos não encontrada", "os processos não foram encontrados"),
+    ("sem_documentos", "os processos não têm documento"),
+    ("não tem extrator", "não há extrator para esse tribunal"),
+    ("Sistema não implementado", "não há extrator para esse tribunal"),
+    ("sessao_expirada", "a sessão caiu"),
+    ("Nenhuma aba", "o sistema não estava aberto"),
+    ("Chrome parou", "o Chrome não respondeu"),
+    ("supabase_falhou", "falha ao gravar no banco"),
+]
+
+
+def resumir_motivos(motivos: list[str]) -> str | None:
+    """
+    A categoria mais frequente entre os erros, em texto de gente. Função pura —
+    ver test_runner.py. `None` quando não há motivo reconhecível.
+
+    Serve para o agente parar de chutar "Login não concluído?" quando nenhum
+    processo é extraído: em 16/08 essa frase apareceu duas vezes com os erros
+    todos em certificado digital, ou seja, com o login perfeitamente feito.
+    """
+    contagem: dict[str, int] = defaultdict(int)
+    for motivo in motivos:
+        for marca, frase in CATEGORIAS_MOTIVO:
+            if marca in motivo:
+                contagem[frase] += 1
+                break
+    if not contagem:
+        return None
+    return max(contagem.items(), key=lambda par: par[1])[0]
 
 
 def inserir_processos_pendentes(
@@ -404,7 +443,8 @@ async def processar_por_sistema(
 ) -> tuple[list[str], list[str], list[tuple[str, str]], list[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
-    Retorna (ids_ok, ids_erro, ids_revisao, ids_nada_novo) para atualizar o Supabase.
+    Retorna (ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro).
+    `motivos_erro`  é o texto cru de cada falha, para o agente dizer a causa real.
     `ids_revisao`   são processos salvos porém sem análise — precisam de aviso.
     `ids_nada_novo` já estavam extraídos e não tinham documento novo — continuam
     processados, mas não devem ser contados como extração desta rodada.
@@ -441,13 +481,16 @@ async def processar_por_sistema(
 
     if not por_sistema:
         print("Nenhum CNJ para processar.")
-        return [], [], [], []
+        return [], [], [], [], []
 
     sistemas_necessarios = ordenar_sistemas(list(por_sistema.keys()))
     ids_ok: list[str] = []
     ids_erro: list[str] = []
     ids_revisao: list[tuple[str, str]] = []
     ids_nada_novo: list[str] = []
+    # texto cru de cada falha, para o agente poder dizer o motivo real em vez de
+    # chutar "login não concluído" — ver resumir_motivos
+    motivos_erro: list[str] = []
 
     # o Chrome travado não se recupera sozinho: uma vez detectado, nenhum sistema
     # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
@@ -519,7 +562,9 @@ async def processar_por_sistema(
                     ids_revisao.append((cnj_id, resultado["revisao_manual"]))
             elif cnj_id:
                 ids_erro.append(cnj_id)
-                marcar_supabase([cnj_id], "erro_browser", motivo_do_erro(resultado))
+                motivo = motivo_do_erro(resultado)
+                motivos_erro.append(motivo)
+                marcar_supabase([cnj_id], "erro_browser", motivo)
         print()
         return True
 
@@ -550,7 +595,7 @@ async def processar_por_sistema(
     elif modo == MODO_INTERATIVO:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
         if not ok:
-            return [], [], [], []
+            return [], [], [], [], []
         for sistema in sistemas_necessarios:
             await _processar_sistema(sistema)
     else:
@@ -559,12 +604,18 @@ async def processar_por_sistema(
         # notar que a rodada nunca termina.
         raise ValueError(f"Modo desconhecido: {modo!r} (esperado um de {MODOS})")
 
-    # ids de CNJs não implementados → ignorado
+    # ids de CNJs não implementados → ignorado, com a mensagem daquele tribunal
+    # (uma chamada por processo, e não em bloco: o texto do TRF1 carrega a origem
+    # dele — ver cnj_router.motivo_sem_extrator)
     if ids_map:
-        ids_nao_impl = [ids_map[i.numero_cnj] for i in nao_impl if i.numero_cnj in ids_map]
-        marcar_supabase(ids_nao_impl, "ignorado", "Sistema não implementado")
+        for info in nao_impl:
+            cnj_id = ids_map.get(info.numero_cnj)
+            if cnj_id:
+                motivo = motivo_sem_extrator(info.numero_cnj)
+                motivos_erro.append(motivo)
+                marcar_supabase([cnj_id], "ignorado", motivo)
 
-    return ids_ok, ids_erro, ids_revisao, ids_nada_novo
+    return ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro
 
 
 # ── modos de execução ─────────────────────────────────────────────
@@ -589,7 +640,7 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro, ids_revisao, ids_nada_novo = await processar_por_sistema(
+    ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro = await processar_por_sistema(
         cnjs, data_str, ids_map, corte_map, modo=modo
     )
     print(f"ids_ok={ids_ok}")
@@ -608,7 +659,8 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     sem_novidade = f", {len(ids_nada_novo)} sem novidade" if ids_nada_novo else ""
     print(f"Concluído: {extraidos} processados{sem_novidade}, {len(ids_erro)} com erro{aviso}")
     return {"total": len(cnjs), "processados": extraidos, "erros": len(ids_erro),
-            "revisao_manual": len(ids_revisao), "nada_novo": len(ids_nada_novo)}
+            "revisao_manual": len(ids_revisao), "nada_novo": len(ids_nada_novo),
+            "motivo_principal": resumir_motivos(motivos_erro)}
 
 
 async def modo_local(data_str: str) -> None:

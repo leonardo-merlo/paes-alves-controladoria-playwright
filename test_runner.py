@@ -6,7 +6,38 @@ from runner import (
     eh_nada_novo,
     eh_queda_de_sessao,
     ordenar_sistemas,
+    resumir_motivos,
 )
+
+MOTIVO_CERTIFICADO = (
+    "PJe recusou o acesso: O acesso à íntegra dos autos por advogados não "
+    "vinculados ao processo somente é permitido mediante login com certificado digital."
+)
+
+
+def test_certificado_nao_vira_pergunta_sobre_login():
+    # a rodada de 16/08 tinha os 4 erros em certificado e o painel perguntava
+    # "Login não concluído?" — mandava conferir justamente o que estava certo
+    assert resumir_motivos([MOTIVO_CERTIFICADO] * 3) == "os processos exigem certificado digital"
+    print("OK motivo_certificado")
+
+
+def test_motivo_mais_frequente_vence():
+    motivos = [MOTIVO_CERTIFICADO, MOTIVO_CERTIFICADO, "sessao_expirada"]
+    assert resumir_motivos(motivos) == "os processos exigem certificado digital"
+    print("OK motivo_mais_frequente")
+
+
+def test_sessao_caida_continua_sendo_dita():
+    # o conserto não é esconder o problema de login, é parar de chutá-lo
+    assert resumir_motivos(["sessao_expirada", "sessao_expirada"]) == "a sessão caiu"
+    print("OK motivo_sessao")
+
+
+def test_sem_motivo_reconhecivel_nao_inventa():
+    assert resumir_motivos(["explodiu de um jeito novo"]) is None
+    assert resumir_motivos([]) is None
+    print("OK motivo_desconhecido")
 
 # mensagem real do Playwright quando o Chrome empilha abas demais e para de
 # responder — capturada na maquina do Henrique e reproduzida em 31/07/2026
@@ -130,6 +161,10 @@ def test_rupe_sozinho_continua_sozinho():
 
 
 if __name__ == "__main__":
+    test_certificado_nao_vira_pergunta_sobre_login()
+    test_motivo_mais_frequente_vence()
+    test_sessao_caida_continua_sendo_dita()
+    test_sem_motivo_reconhecivel_nao_inventa()
     test_rupe_vai_na_frente()
     test_sem_rupe_a_ordem_nao_muda()
     test_rupe_sozinho_continua_sozinho()

@@ -280,7 +280,14 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     if total == 0:
         return "concluido", f"Nenhum processo pendente.{recuperados}"
     if n_ok == 0 and n_novo == 0:
-        return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique."
+        # Dizer a causa quando ela é conhecida, em vez de chutar "faltou login".
+        # Em 16/08 essa pergunta apareceu duas vezes numa rodada em que os erros
+        # eram todos certificado digital — o login estava perfeito, e a mensagem
+        # mandava o Henrique conferir justamente o que não tinha problema.
+        principal = resumo.get("motivo_principal")
+        if principal:
+            return "erro", f"Nada extraído ({n_err} com erro): {principal}.{recuperados}"
+        return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique.{recuperados}"
     if n_err > 0:
         return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{aviso}{recuperados}"
     return "concluido", f"{n_ok} processado(s){novidade}.{aviso}{recuperados}"
