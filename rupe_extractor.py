@@ -44,6 +44,11 @@ MAX_DOCS = 300
 # Timeout curto no download faz pular rápido em vez de arrastar o lote inteiro.
 DOWNLOAD_TIMEOUT_MS = 10_000   # peça boa baixa em <1,5s; peça que o servidor não entrega falha rápido
 PARSE_TIMEOUT_S = 30           # teto p/ extração de texto via PDF.js (maior peça boa ~14s)
+# Checagem de sessão. A navegação tem teto só para não pendurar a rodada — se ela
+# estourar, quem decide é o DOM (ver verificar_sessao). O filtro é esperado de
+# verdade: medido em 16/08, ele apareceu em ~5s numa sessão viva.
+ESPERA_NAVEGACAO_MS = 30_000
+ESPERA_FILTRO_MS = 20_000
 
 HOST = "pe.tjmg.jus.br"
 BASE = "https://pe.tjmg.jus.br"
@@ -99,20 +104,37 @@ async def encontrar_aba_rupe(browser: Browser) -> Page:
 
 
 async def verificar_sessao(page: Page) -> bool:
-    """Sessão viva = menu 'Meus Processos' acessível, sem redirecionamento p/ login."""
+    """
+    Sessão viva = filtro de processos na tela, sem redirecionamento p/ login.
+
+    Quem dá o veredito é o DOM, e não o `goto`. Até 16/08/2026 uma navegação que
+    não completasse caía no `except` e virava "sessao_expirada" — e o RUPE é
+    lento o bastante para isso acontecer com sessão perfeitamente viva: medido
+    nesta data, o goto estourou 30s e, ainda assim, a página estava carregada,
+    logada e com o filtro renderizado em 5s. O operador logava, o agente dizia
+    que não, e a fila voltava inteira sem ninguém entender o motivo.
+
+    Espera pelo elemento em vez de dormir um tempo fixo: 1,5s não bastava para
+    esta página JSF renderizar, e dormir mais só tornaria o caminho feliz lento.
+    """
     try:
-        await page.goto(CONSULTA_PROCESSOS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1500)
+        await page.goto(CONSULTA_PROCESSOS, wait_until="domcontentloaded",
+                        timeout=ESPERA_NAVEGACAO_MS)
     except Exception:
-        return False
+        pass  # de propósito: navegação incompleta não é sessão caída
+
     if any(ind in page.url for ind in INDICADORES_DESLOGADO):
         return False
     try:
-        return await page.evaluate(
-            f"!!document.getElementById({json.dumps(ID_TOGGLE)})"
+        await page.wait_for_function(
+            f"() => !!document.getElementById({json.dumps(ID_TOGGLE)})",
+            timeout=ESPERA_FILTRO_MS,
         )
     except Exception:
         return False
+    # reconfere depois da espera: o RUPE às vezes redireciona para o login
+    # tarde, já com a página montada.
+    return not any(ind in page.url for ind in INDICADORES_DESLOGADO)
 
 
 async def _expandir_pesquisa(page: Page) -> None:
