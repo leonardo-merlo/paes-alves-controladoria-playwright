@@ -26,3 +26,6 @@ debug_outputs/
 
 # Pausa do agente — é por máquina, e precisa sobreviver ao atualizar.bat
 AGENTE-PAUSADO.txt
+
+# saída do agente, uma por dia — ver agente.ligar_log
+logs/

@@ -101,6 +101,32 @@ def test_resumo_sem_reanalise_nao_polui_mensagem():
     print("OK resumo_sem_reanalise")
 
 
+def test_resumo_conta_quem_voltou_para_a_fila():
+    # a rodada 1 de 17/08 devolveu ~14 processos à fila e o painel disse
+    # "concluído — 4 processado(s)", sem uma palavra sobre os outros
+    _, msg = _resumo_para_status(
+        {"total": 18, "processados": 4, "erros": 0, "devolvidos": 14}
+    )
+    assert "14 de volta na fila" in msg
+    print("OK resumo_conta_devolvidos")
+
+
+def test_resumo_de_rodada_abortada_diz_quantos_sobraram():
+    status, msg = _resumo_para_status(
+        {"total": 18, "processados": 0, "erros": 1, "devolvidos": 17,
+         "motivo_principal": "o Chrome não respondeu"}
+    )
+    assert status == "erro"
+    assert "o Chrome não respondeu" in msg and "17 de volta na fila" in msg
+    print("OK resumo_abortada_conta_fila")
+
+
+def test_resumo_sem_devolvidos_nao_polui_mensagem():
+    _, msg = _resumo_para_status({"total": 1, "processados": 1, "erros": 0})
+    assert "fila" not in msg
+    print("OK resumo_sem_devolvidos")
+
+
 # ── pausa por máquina ─────────────────────────────────────────────
 # Serve para rodar as extracoes noutro computador sem que a maquina do Henrique
 # dispute os comandos. Precisa sobreviver a reinicio do Windows, por isso e um
@@ -178,6 +204,9 @@ if __name__ == "__main__":
     test_resumo_parcial()
     test_resumo_anuncia_analise_recuperada()
     test_resumo_sem_reanalise_nao_polui_mensagem()
+    test_resumo_conta_quem_voltou_para_a_fila()
+    test_resumo_de_rodada_abortada_diz_quantos_sobraram()
+    test_resumo_sem_devolvidos_nao_polui_mensagem()
     test_sem_arquivo_o_agente_trabalha()
     test_com_arquivo_o_agente_para()
     test_apagar_o_arquivo_religa()

@@ -12,9 +12,10 @@ Uso:
 """
 
 import asyncio
+import sys
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from cnj_router import nome_sistema
@@ -59,6 +60,15 @@ NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
 # bloquear novas rodadas — senão a fila travaria pra sempre após um crash.
 LIMITE_RODADA_ABANDONADA_MIN = 90
 
+# Onde fica a cópia em arquivo do que aparece na janela do agente. Um arquivo por
+# dia, ao lado do código, no .gitignore.
+#
+# Existe porque até 17/08 a saída morava só no console: quando a rodada do
+# Henrique falhou, o texto real do erro tinha rolado para fora da tela e o
+# diagnóstico teve de ser reconstruído por dedução, a partir de timestamps e
+# durações no banco. Log é mais barato que dedução.
+PASTA_LOGS = "logs"
+
 
 # Trechos que aparecem quando a máquina está sem rede. O agente sobe junto com o
 # Windows, antes de o Wi-Fi conectar, e passa alguns minutos sem conseguir falar
@@ -73,6 +83,50 @@ ERROS_DE_REDE = (
     "Connection reset",
     "10054",
 )
+
+
+class _Tee:
+    """
+    Escreve no console E no arquivo de log, sem trocar um pelo outro.
+
+    O Henrique acompanha a janela do agente — mandar tudo para arquivo deixaria
+    ele sem retorno nenhum. Falha de escrita no arquivo é engolida de propósito:
+    disco cheio ou arquivo travado pelo antivírus não pode derrubar a extração.
+    """
+
+    def __init__(self, console, arquivo) -> None:
+        self._console = console
+        self._arquivo = arquivo
+
+    def write(self, texto: str) -> int:
+        try:
+            self._arquivo.write(texto)
+            self._arquivo.flush()
+        except Exception:  # noqa: BLE001 — log é conveniência, não pode derrubar
+            pass
+        return self._console.write(texto)
+
+    def flush(self) -> None:
+        self._console.flush()
+
+    def __getattr__(self, nome: str):
+        return getattr(self._console, nome)
+
+
+def ligar_log(pasta: Path | None = None) -> Path | None:
+    """Duplica stdout e stderr para logs/agente-AAAA-MM-DD.log. Devolve o caminho."""
+    base = (pasta or Path(__file__).parent) / PASTA_LOGS
+    try:
+        base.mkdir(exist_ok=True)
+        caminho = base / f"agente-{date.today()}.log"
+        arquivo = caminho.open("a", encoding="utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001 — sem log o agente roda igual
+        print(f"Aviso: não foi possível abrir o log ({e}) — seguindo sem arquivo.")
+        return None
+    arquivo.write(f"\n===== agente iniciado em {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+    sys.stdout = _Tee(sys.stdout, arquivo)
+    sys.stderr = _Tee(sys.stderr, arquivo)
+    return caminho
 
 
 def esta_pausado(pasta: Path | None = None) -> bool:
@@ -264,6 +318,7 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     n_rev = resumo.get("revisao_manual", 0)
     n_novo = resumo.get("nada_novo", 0)
     n_rean = resumo.get("reanalisados", 0)
+    n_fila = resumo.get("devolvidos", 0)
 
     # processo salvo sem análise não conta como erro, mas não pode passar em
     # silêncio: ele aparece no painel como pronto e sem prazo nenhum.
@@ -274,6 +329,10 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
     # análise recuperada de rodada anterior — não é extração desta, mas o Henrique
     # precisa saber que apareceu rascunho novo em processo que ele já dava por visto.
     recuperados = f" {n_rean} análise(s) recuperada(s)." if n_rean else ""
+    # nem erro nem sucesso: não chegaram a ser tentados e continuam na fila. Sem
+    # esta parte, a rodada de 17/08 devolveu 14 processos e mesmo assim o painel
+    # disse "concluído — 4 processado(s)", sem uma palavra sobre os outros.
+    na_fila = f" {n_fila} de volta na fila." if n_fila else ""
 
     if resumo.get("cdp_falhou"):
         return "erro", "Não foi possível abrir o navegador (CDP)."
@@ -286,17 +345,20 @@ def _resumo_para_status(resumo: dict) -> tuple[str, str]:
         # mandava o Henrique conferir justamente o que não tinha problema.
         principal = resumo.get("motivo_principal")
         if principal:
-            return "erro", f"Nada extraído ({n_err} com erro): {principal}.{recuperados}"
-        return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique.{recuperados}"
+            return "erro", f"Nada extraído ({n_err} com erro): {principal}.{na_fila}{recuperados}"
+        return "erro", f"Nada extraído ({n_err} com erro). Login não concluído? Verifique.{na_fila}{recuperados}"
     if n_err > 0:
-        return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{aviso}{recuperados}"
-    return "concluido", f"{n_ok} processado(s){novidade}.{aviso}{recuperados}"
+        return "concluido", f"{n_ok} processado(s){novidade}, {n_err} com erro.{na_fila}{aviso}{recuperados}"
+    return "concluido", f"{n_ok} processado(s){novidade}.{na_fila}{aviso}{recuperados}"
 
 
 def main_loop() -> None:
+    caminho_log = ligar_log()
     _carregar_env()
     client = _get_client()
     print("Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
+    if caminho_log:
+        print(f"Log desta rodada: {caminho_log}")
     avisou_pausa = False
     ultimo_aviso: str | None = None
     while True:
