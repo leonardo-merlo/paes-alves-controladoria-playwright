@@ -1,10 +1,14 @@
 """test_runner.py — testes das decisões de desfecho da rodada. Rodar: python test_runner.py"""
 
 from runner import (
+    LIMITE_FALHAS_CDP,
+    MOTIVO_CHROME,
+    decidir_chrome_morreu,
     duracao_segundos,
     eh_chrome_inacessivel,
     eh_nada_novo,
     eh_queda_de_sessao,
+    motivo_devolucao,
     ordenar_sistemas,
     resumir_motivos,
 )
@@ -160,6 +164,67 @@ def test_rupe_sozinho_continua_sozinho():
     print("OK rupe_sozinho")
 
 
+# ── devolver à fila sem apagar o diagnóstico ──────────────────────
+# A rodada de 17/08: o Henrique perguntou por que os erros de ontem tinham
+# sumido. Tinham virado "pendente — o Chrome parou de responder".
+
+def test_devolucao_preserva_o_motivo_anterior():
+    texto = motivo_devolucao(MOTIVO_CHROME, MOTIVO_CERTIFICADO)
+    assert texto.startswith(MOTIVO_CHROME)
+    assert "certificado digital" in texto
+    print("OK devolucao_preserva_motivo")
+
+
+def test_devolucao_sem_motivo_anterior_nao_inventa():
+    assert motivo_devolucao(MOTIVO_CHROME, None) == MOTIVO_CHROME
+    assert motivo_devolucao(MOTIVO_CHROME, "") == MOTIVO_CHROME
+    print("OK devolucao_sem_anterior")
+
+
+def test_devolucao_nao_repete_o_mesmo_motivo():
+    # duas rodadas seguidas morrendo pelo Chrome não viram "Chrome (antes: Chrome)"
+    assert motivo_devolucao(MOTIVO_CHROME, MOTIVO_CHROME) == MOTIVO_CHROME
+    print("OK devolucao_sem_repeticao")
+
+
+def test_devolucao_nao_empilha_camadas():
+    # a causa raiz é o que interessa: rodada após rodada não pode encher os 400
+    # caracteres do campo com '(antes: (antes: ...))'
+    uma = motivo_devolucao(MOTIVO_CHROME, MOTIVO_CERTIFICADO)
+    duas = motivo_devolucao(MOTIVO_CHROME, uma)
+    assert duas == uma
+    assert duas.count("(antes:") == 1
+    print("OK devolucao_sem_empilhar")
+
+
+def test_devolucao_cabe_no_campo():
+    assert len(motivo_devolucao(MOTIVO_CHROME, "x" * 900)) <= 400
+    print("OK devolucao_truncada")
+
+
+# ── uma falha de CDP não condena a rodada ─────────────────────────
+
+def test_cdp_mudo_condena_na_primeira():
+    # Chrome que não responde nem ao endereço de debug não volta sozinho:
+    # insistir custaria 180s por processo sem extrair nada
+    assert decidir_chrome_morreu(cdp_responde=False, falhas_cdp=1) is True
+    print("OK cdp_mudo_condena")
+
+
+def test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha():
+    # o caso de 17/08: uma falha no primeiro CNJ do PJe jogou 17 processos de
+    # dois sistemas de volta para a fila sem nenhum deles ter sido tentado
+    assert decidir_chrome_morreu(cdp_responde=True, falhas_cdp=1) is False
+    print("OK chrome_vivo_segue")
+
+
+def test_falha_repetida_com_chrome_vivo_ainda_condena():
+    # o limite existe para não gastar 180s por CNJ contra um Chrome que responde
+    # ao HTTP mas não deixa o Playwright anexar — a fila de 20 viraria uma hora
+    assert decidir_chrome_morreu(cdp_responde=True, falhas_cdp=LIMITE_FALHAS_CDP) is True
+    print("OK falha_repetida_condena")
+
+
 if __name__ == "__main__":
     test_certificado_nao_vira_pergunta_sobre_login()
     test_motivo_mais_frequente_vence()
@@ -182,4 +247,12 @@ if __name__ == "__main__":
     test_duracao_arredonda_para_segundos_inteiros()
     test_duracao_nunca_e_negativa()
     test_duracao_de_processo_instantaneo_e_zero()
+    test_devolucao_preserva_o_motivo_anterior()
+    test_devolucao_sem_motivo_anterior_nao_inventa()
+    test_devolucao_nao_repete_o_mesmo_motivo()
+    test_devolucao_nao_empilha_camadas()
+    test_devolucao_cabe_no_campo()
+    test_cdp_mudo_condena_na_primeira()
+    test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha()
+    test_falha_repetida_com_chrome_vivo_ainda_condena()
     print("Todos os testes passaram.")

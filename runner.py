@@ -20,7 +20,11 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from analyzer import analisar_processo
 from cnj_router import rotear_lista, motivo_sem_extrator, CNJInfo
 from extrator_dispatch import obter_extrator, esta_implementado, descricao_pendente
-from sistema_auth import preparar_autenticacao, monitorar_logins_e_processar
+from sistema_auth import (
+    preparar_autenticacao,
+    monitorar_logins_e_processar,
+    _get_abas_chrome,
+)
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 
 INPUTS_DIR = Path("inputs")
@@ -29,6 +33,17 @@ MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
                  "abra de novo, faça login e rode outra vez")
 MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
 MOTIVO_LOGIN_PENDENTE = "Login ainda não estava feito quando a extração tentou"
+
+# Como o motivo antigo é preservado quando o processo volta para a fila. Ver
+# motivo_devolucao — sem isto, devolver à fila apagava o diagnóstico da rodada
+# anterior.
+MARCA_ANTES = " (antes: "
+
+# Quantas falhas de CDP são toleradas antes de condenar a rodada, QUANDO o Chrome
+# ainda responde ao endereço de debug. Não é 1 porque uma ponta solta condenava
+# 17 processos (17/08); não é alto porque cada falha custa os 180s do timeout do
+# Playwright parada — ver a dívida sobre esse teto em docs/divida-tecnica.md.
+LIMITE_FALHAS_CDP = 2
 
 # Como a rodada trata o login. Eram dois valores num booleano (`modo_auto`) e
 # passaram a ser três quando "abrir os sistemas" virou um comando separado de
@@ -69,7 +84,8 @@ def ler_cnjs_supabase() -> list[dict]:
     client = _get_client()
     res = (
         client.table("processos")
-        .select("id, numero_cnj, fonte, lote_id, sistema, data_ultima_consulta")
+        .select("id, numero_cnj, fonte, lote_id, sistema, data_ultima_consulta,"
+                " motivo_ignorado")
         .in_("pje_status", ["pendente", "erro_browser", "captcha_bloqueado"])
         .eq("duplicata", False)
         .order("data_entrada")
@@ -190,6 +206,69 @@ def eh_chrome_inacessivel(resultado: dict | None) -> bool:
         return False
     erro = str(resultado.get("erro") or "")
     return "connect_over_cdp" in erro or "conectar ao Chrome" in erro
+
+
+def chrome_responde() -> bool:
+    """
+    O Chrome ainda atende no endereço de debug?
+
+    Checagem barata (urllib, 2s de teto) e independente do Playwright — é a mesma
+    que `abrir_sistemas` usa para saber se precisa subir o Chrome. Serve para
+    separar "o Chrome morreu" de "esta conexão específica falhou": em 17/08 uma
+    única falha de `connect_over_cdp` condenou 17 processos de dois sistemas que
+    nunca chegaram a ser tentados.
+    """
+    return bool(_get_abas_chrome())
+
+
+def _raiz_do_motivo(motivo: str) -> str:
+    """
+    A causa original de um motivo, sem as camadas de '(antes: ...)' empilhadas.
+    Função pura — ver test_runner.py.
+    """
+    if MARCA_ANTES not in motivo:
+        return motivo
+    return motivo.rsplit(MARCA_ANTES, 1)[1].rstrip(")")
+
+
+def motivo_devolucao(motivo_novo: str, motivo_anterior: str | None) -> str:
+    """
+    O que gravar em `motivo_ignorado` ao devolver um processo à fila. Função pura
+    — ver test_runner.py.
+
+    Devolver à fila sobrescrevia o motivo anterior, e como a fila já traz de volta
+    quem estava em `erro_browser`, o efeito era este: o Henrique clicava em
+    extrair, a rodada abortava, e o diagnóstico de ontem ("certificado digital")
+    era substituído por "o Chrome parou de responder". Em 17/08 ele perguntou por
+    que os erros tinham sumido — tinham sido apagados por esta linha.
+
+    Só a causa raiz é preservada: empilhar '(antes: (antes: ...))' a cada rodada
+    encheria os 400 caracteres do campo com o mesmo aviso repetido.
+    """
+    if not motivo_anterior:
+        return motivo_novo[:400]
+    raiz = _raiz_do_motivo(motivo_anterior).strip()
+    if not raiz or raiz == motivo_novo:
+        return motivo_novo[:400]
+    return f"{motivo_novo}{MARCA_ANTES}{raiz})"[:400]
+
+
+def decidir_chrome_morreu(cdp_responde: bool, falhas_cdp: int) -> bool:
+    """
+    Esta falha de CDP condena a rodada inteira? Função pura — ver test_runner.py.
+
+    Duas forças opostas, e por isso não é uma linha só. Insistir contra um Chrome
+    de fato travado custa 180s por processo e não extrai nada. Mas
+    desistir na primeira falha, como era até 17/08, joga fora a fila de todos os
+    sistemas seguintes por causa de uma ponta solta.
+
+    O desempate é a checagem barata: CDP mudo = travado de verdade, para na hora.
+    CDP respondendo = a falha foi da conexão do Playwright, então segue a fila e
+    só desiste se acontecer de novo.
+    """
+    if not cdp_responde:
+        return True
+    return falhas_cdp >= LIMITE_FALHAS_CDP
 
 
 def motivo_do_erro(resultado: dict | None) -> str:
@@ -421,7 +500,10 @@ async def _extrair_e_analisar(
     else:
         print(f"{prefixo} — ERRO Supabase: {sb.get('erro')}")
         print(sb.get("tb", "(sem traceback)"))
-        return {"erro": "supabase_falhou", "numero_cnj": info.numero_cnj}
+        # a exceção real vai junto: em 17/08 o banco guardou só "supabase_falhou"
+        # e não deu para saber se foi rede, SSL ou dado inválido.
+        return {"erro": "supabase_falhou", "numero_cnj": info.numero_cnj,
+                "mensagem": str(sb.get("erro") or "")[:200]}
 
     if motivo_revisao:
         # sem este aviso o processo fica 'processado' e some do painel sem prazo
@@ -440,14 +522,20 @@ async def processar_por_sistema(
     ids_map: dict[str, str] | None = None,
     corte_map: dict[str, str | None] | None = None,
     modo: str = MODO_INTERATIVO,
-) -> tuple[list[str], list[str], list[tuple[str, str]], list[str]]:
+    motivos_anteriores: dict[str, str | None] | None = None,
+) -> tuple[list[str], list[str], list[tuple[str, str]], list[str], list[str], set[str]]:
     """
     Agrupa os CNJs por sistema, autentica uma vez, processa um sistema por vez.
-    Retorna (ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro).
+    Retorna (ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro, devolvidos).
     `motivos_erro`  é o texto cru de cada falha, para o agente dizer a causa real.
     `ids_revisao`   são processos salvos porém sem análise — precisam de aviso.
     `ids_nada_novo` já estavam extraídos e não tinham documento novo — continuam
     processados, mas não devem ser contados como extração desta rodada.
+    `devolvidos`    voltaram para 'pendente' sem terem sido tentados. Não são erro
+    e não são sucesso: é trabalho que ficou para a próxima rodada, e some do
+    resumo se ninguém contar (ver `_resumo_para_status` no agente).
+    `motivos_anteriores` é o `motivo_ignorado` que cada CNJ já tinha, para que
+    devolver à fila não apague o diagnóstico da rodada passada.
     """
 
     # separar por sistema
@@ -481,7 +569,7 @@ async def processar_por_sistema(
 
     if not por_sistema:
         print("Nenhum CNJ para processar.")
-        return [], [], [], [], []
+        return [], [], [], [], [], set()
 
     sistemas_necessarios = ordenar_sistemas(list(por_sistema.keys()))
     ids_ok: list[str] = []
@@ -495,13 +583,27 @@ async def processar_por_sistema(
     # o Chrome travado não se recupera sozinho: uma vez detectado, nenhum sistema
     # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
     chrome_morreu = False
+    falhas_cdp = 0
+    # quem voltou para a fila sem ser tentado — set porque o mesmo CNJ pode ser
+    # devolvido por dois caminhos (fila do sistema e timeout de login)
+    devolvidos: set[str] = set()
+    anteriores = motivos_anteriores or {}
 
     def _devolver_a_fila(restantes: list[CNJInfo], motivo: str) -> None:
-        ids = [ids_map[o.numero_cnj] for o in restantes
-               if ids_map and o.numero_cnj in ids_map]
-        if ids:
-            print(f"  {len(ids)} CNJ(s) devolvidos à fila")
-        marcar_supabase(ids, "pendente", motivo)
+        alvos = [o.numero_cnj for o in restantes
+                 if ids_map and o.numero_cnj in ids_map]
+        if alvos:
+            print(f"  {len(alvos)} CNJ(s) devolvidos à fila")
+
+        # agrupado por motivo final para não fazer um UPDATE por processo: quase
+        # todos compartilham o mesmo motivo anterior, então costuma dar 1 ou 2.
+        por_motivo: dict[str, list[str]] = defaultdict(list)
+        for cnj in alvos:
+            cnj_id = ids_map[cnj]
+            devolvidos.add(cnj_id)
+            por_motivo[motivo_devolucao(motivo, anteriores.get(cnj))].append(cnj_id)
+        for texto, ids in por_motivo.items():
+            marcar_supabase(ids, "pendente", texto)
 
     async def _processar_sistema(sistema: str) -> bool:
         """
@@ -510,7 +612,7 @@ async def processar_por_sistema(
         novo mais tarde. Todo o resto devolve True: o sistema está resolvido para
         esta rodada, mesmo que tenha dado erro.
         """
-        nonlocal chrome_morreu
+        nonlocal chrome_morreu, falhas_cdp
         infos = por_sistema[sistema]
         total = len(infos)
 
@@ -520,7 +622,11 @@ async def processar_por_sistema(
             return True
 
         print(f"{'='*50}")
-        print(f"[{sistema}] {total} CNJ(s)\n")
+        # Quantas abas o Chrome tem agora. É diagnóstico, não controle: a hipótese
+        # principal para as quedas de CDP de 17/08 é acúmulo de abas (o mesmo que
+        # travou a máquina em 31/07 — ver iniciar._urls_que_faltam), e sem esta
+        # linha a próxima falha volta a ser deduzida de timestamps no banco.
+        print(f"[{sistema}] {total} CNJ(s) — {len(_get_abas_chrome())} aba(s) no Chrome\n")
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
@@ -533,11 +639,18 @@ async def processar_por_sistema(
                 gravar_duracao(cnj_id, resultado["duracao_extracao_s"])
 
             if eh_chrome_inacessivel(resultado):
-                chrome_morreu = True
-                print(f"  [{sistema}] o Chrome parou de responder — abortando a rodada")
-                print(f"  >>> {MOTIVO_CHROME}")
-                _devolver_a_fila(infos[i - 1:], MOTIVO_CHROME)
-                break
+                falhas_cdp += 1
+                cdp_ok = chrome_responde()
+                if decidir_chrome_morreu(cdp_ok, falhas_cdp):
+                    chrome_morreu = True
+                    print(f"  [{sistema}] o Chrome parou de responder — abortando a rodada")
+                    print(f"  >>> {MOTIVO_CHROME}")
+                    _devolver_a_fila(infos[i - 1:], MOTIVO_CHROME)
+                    break
+                # o CDP respondeu: foi esta conexão que falhou, não o Chrome.
+                # Condenar a rodada aqui custou 17 processos em 17/08.
+                print(f"  [{sistema}] falha de CDP {falhas_cdp}/{LIMITE_FALHAS_CDP}, "
+                      "mas o Chrome respondeu — seguindo a fila")
 
             if eh_queda_de_sessao(resultado):
                 # seguir a fila só queima os CNJs restantes contra um sistema
@@ -580,6 +693,7 @@ async def processar_por_sistema(
             ]
             # login não concluído = não houve extração. Marcar erro aqui fazia
             # o painel acusar falha em processo que nunca chegou a ser lido.
+            devolvidos.update(ids_timeout)
             marcar_supabase(
                 ids_timeout, "pendente",
                 "Login não concluído dentro do tempo — nenhuma sessão ativa nas tentativas",
@@ -595,7 +709,7 @@ async def processar_por_sistema(
     elif modo == MODO_INTERATIVO:
         ok = await preparar_autenticacao(sistemas_necessarios, modo_auto=False)
         if not ok:
-            return [], [], [], [], []
+            return [], [], [], [], [], set()
         for sistema in sistemas_necessarios:
             await _processar_sistema(sistema)
     else:
@@ -615,7 +729,12 @@ async def processar_por_sistema(
                 motivos_erro.append(motivo)
                 marcar_supabase([cnj_id], "ignorado", motivo)
 
-    return ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro
+    # um CNJ devolvido à fila que depois foi extraído numa retentativa (MODO_AUTO)
+    # não está mais na fila — contá-lo faria o painel dizer que sobrou trabalho
+    # que na verdade foi feito.
+    devolvidos -= set(ids_ok) | set(ids_erro)
+
+    return ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro, devolvidos
 
 
 # ── modos de execução ─────────────────────────────────────────────
@@ -636,12 +755,17 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
         for p in pendentes
     }
     hints = {p["numero_cnj"]: p.get("sistema") for p in pendentes}
+    # o que cada um já trazia escrito, para devolver à fila sem apagar o motivo
+    motivos_anteriores = {p["numero_cnj"]: p.get("motivo_ignorado") for p in pendentes}
     cnjs = rotear_lista(numeros, hints)
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
-    ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro = await processar_por_sistema(
-        cnjs, data_str, ids_map, corte_map, modo=modo
+    ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro, devolvidos = (
+        await processar_por_sistema(
+            cnjs, data_str, ids_map, corte_map, modo=modo,
+            motivos_anteriores=motivos_anteriores,
+        )
     )
     print(f"ids_ok={ids_ok}")
     print(f"ids_erro={ids_erro}")
@@ -657,9 +781,12 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     extraidos = len(ids_ok) - len(ids_nada_novo)
     aviso = f", {len(ids_revisao)} sem análise (revisão manual)" if ids_revisao else ""
     sem_novidade = f", {len(ids_nada_novo)} sem novidade" if ids_nada_novo else ""
-    print(f"Concluído: {extraidos} processados{sem_novidade}, {len(ids_erro)} com erro{aviso}")
+    na_fila = f", {len(devolvidos)} de volta na fila" if devolvidos else ""
+    print(f"Concluído: {extraidos} processados{sem_novidade}, "
+          f"{len(ids_erro)} com erro{na_fila}{aviso}")
     return {"total": len(cnjs), "processados": extraidos, "erros": len(ids_erro),
             "revisao_manual": len(ids_revisao), "nada_novo": len(ids_nada_novo),
+            "devolvidos": len(devolvidos),
             "motivo_principal": resumir_motivos(motivos_erro)}
 
 
