@@ -172,3 +172,36 @@ frente quando tiver um CNJ só).
 
 **O que faz mudar de ideia:** a próxima rodada. Se ele passar, o item morre
 sozinho; se falhar de novo pelo mesmo motivo, vira decisão consciente.
+
+---
+
+### Parede de traceback do asyncio ao fim da rodada
+
+**Onde:** `conectar_cdp()` nos três extratores — o `async_playwright().start()` /
+`playwright.stop()` que cada CNJ faz.
+
+**O quê:** depois de a rodada já ter impresso "Concluído", saem vários blocos de
+`ValueError: I/O operation on closed pipe`, vindos de
+`BaseSubprocessTransport.__del__` e `_ProactorBasePipeTransport.__del__`. É o
+coletor de lixo do Python tentando avisar sobre o processo `node.exe` do
+Playwright depois que o event loop já foi fechado — no Windows o `__repr__` desse
+aviso consulta um pipe que não existe mais e estoura.
+
+**Por que não é defeito:** nada falhou. A extração já terminou, o resumo já foi
+gravado e o desfecho de cada processo já está no banco quando esses blocos
+aparecem. Medido em 18/08/2026 numa rodada que devolveu os 18 CNJs à fila
+corretamente, com os tracebacks logo depois.
+
+**Por que incomoda mesmo assim:** quem lê a janela do agente é o Henrique. Uma
+parede de traceback vermelho parece quebra — foi por esse mesmo motivo que o erro
+de rede repetido virou uma linha só em `d6dfc75`. E agora isso também entra no
+`logs/agente-AAAA-MM-DD.log`, empurrando para longe o que interessa.
+
+**O que fazer quando for a hora:** a saída de verdade não é silenciar o aviso, é
+parar de subir e derrubar um driver do Playwright **por CNJ**. Uma instância viva
+durante o sistema inteiro tira o ruído e ainda economiza o custo de start/stop a
+cada processo. Mexe nos três extratores e no ciclo de vida da conexão, então é
+tarefa própria, não um reparo de passagem.
+
+**O que faz voltar a valer a pena:** o Henrique reportar que "deu erro" numa
+rodada que na verdade deu certo. Aí o ruído passou a custar diagnóstico.
