@@ -102,3 +102,73 @@ e nenhuma janela de atualização deixa o Henrique sem sistema.
 e que o painel novo está no ar há algumas semanas. Aí `iniciar` sai dos dois
 lados, junto com o `modo_auto` e a máquina de retentativa de login em
 `sistema_auth.py`, que só ele usa.
+
+---
+
+### Por que o Chrome para de responder ao CDP: ainda não medido
+
+**Onde:** máquina do Henrique. Nenhum arquivo específico.
+
+**O quê:** em 17/08/2026 as duas rodadas dele morreram com
+`connect_over_cdp` estourando os 180s (assinatura no banco:
+`duracao_extracao_s = 181`). O que foi corrigido nessa data foi o **estrago** —
+uma falha dessas não condena mais a rodada inteira, e o motivo anterior deixou de
+ser apagado. A **causa** do travamento continua desconhecida.
+
+Candidatos, em ordem de suspeita: acúmulo de abas no perfil
+`C:\ChromeControladoria` (já travou a máquina em 31/07 — ver
+`iniciar._urls_que_faltam`), memória depois dos ~14min de PDF.js do RUPE, e o
+antivírus interceptando a 9222.
+
+**Por que assim:** não reproduz na máquina do Leonardo, e por dois motivos
+independentes — a rede é outra, e o processo pesado do RUPE
+(`2817393-23.2026.8.13.0000`) **só aparece com o login do Henrique**. Sem
+reproduzir, qualquer correção da causa seria chute.
+
+**O que faz voltar a valer a pena:** a próxima falha na máquina dele. Agora
+existem duas coisas que não existiam: `logs/agente-AAAA-MM-DD.log`, com o texto
+real do erro, e a contagem de abas impressa no início de cada sistema. Se o log
+mostrar dezenas de abas, é acúmulo e a correção é fechar aba usada; se mostrar
+três, é memória ou antivírus.
+
+---
+
+### Timeout de 180s do `connect_over_cdp` continua o padrão
+
+**Onde:** `conectar_cdp()` em `pje_extractor.py`, `eproc_extractor.py` e
+`rupe_extractor.py`.
+
+**O quê:** os três chamam `connect_over_cdp` sem `timeout`, então vale o padrão
+do Playwright (`DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT_IN_MILLISECONDS`, 180s). Numa
+conexão com `127.0.0.1` isso é absurdo: com 3 abas a conexão fecha em 0,5s
+(medido em 31/07). Cada falha custa 3 minutos parado, e como a rodada agora
+tolera `LIMITE_FALHAS_CDP` falhas, o pior caso é ~6 minutos de espera.
+
+**Por que assim:** o modo de falha que se quer detectar é justamente "muitas abas
+deixam a conexão lenta". Baixar o teto sem saber quanto tempo uma conexão
+*saudável* leva na máquina do Henrique, com o número de abas que ela realmente
+tem, transformaria rodada lenta em rodada quebrada.
+
+**O que faz mudar de ideia:** ter essa medida. O log já registra a contagem de
+abas; com dois ou três dias de rodada dá para ver o tempo típico e fixar um teto
+com margem — 30s é o palpite atual, mas é palpite.
+
+---
+
+### `2817393-23.2026.8.13.0000` abre toda rodada e nunca termina
+
+**Onde:** dado no Supabase, mais `PRIORIDADE_SISTEMAS` em `runner.py`.
+
+**O quê:** o RUPE vai na frente da fila de propósito (a sessão dele cai antes das
+outras), e esse processo é o único do RUPE. Resultado: ele é o **primeiro de toda
+rodada**, gasta ~865s (14min) e, até agora, nunca terminou — em 17/08 chegou até
+a gravação e falhou por rede. Toda rodada paga 14 minutos antes de tocar no
+primeiro processo que tem chance de dar certo.
+
+**Por que assim:** não é bug, são duas decisões corretas se encontrando. E mexer
+nisso é decisão do Leonardo, não do código: as saídas são diferentes entre si
+(marcar como `ignorado`, dar um teto de tempo por processo, ou tirar o RUPE da
+frente quando tiver um CNJ só).
+
+**O que faz mudar de ideia:** a próxima rodada. Se ele passar, o item morre
+sozinho; se falhar de novo pelo mesmo motivo, vira decisão consciente.
