@@ -24,7 +24,9 @@ from extrator_dispatch import obter_extrator, esta_implementado, descricao_pende
 from sistema_auth import (
     preparar_autenticacao,
     monitorar_logins_e_processar,
+    fechar_aba_cdp,
     _get_abas_chrome,
+    SISTEMA_HOST,
 )
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 
@@ -207,6 +209,66 @@ def eh_chrome_inacessivel(resultado: dict | None) -> bool:
         return False
     erro = str(resultado.get("erro") or "")
     return "connect_over_cdp" in erro or "conectar ao Chrome" in erro
+
+
+# O que conta como página de tribunal, para a limpeza.
+#
+# É o sufixo, e não a lista de SISTEMA_HOST, porque os sistemas redirecionam para
+# hosts que não estão nela: medido em 19/08, abrir `pje.tjmg.jus.br` termina em
+# `sso.cloud.pje.jus.br`. Com a lista fechada, a aba vazada ficava para trás
+# justamente por ter ido para o login — que é onde ela mais costuma parar.
+#
+# Todo tribunal brasileiro mora em `.jus.br`, e nada do Henrique mora. O que ele
+# abrir (Gmail, Drive, pesquisa) não casa; e se ele tiver uma aba de tribunal
+# aberta, ela estava lá antes da rodada e a trava do `ids_no_inicio` já a protege.
+SUFIXO_JUDICIAL = ".jus.br"
+HOSTS_JUDICIAIS = frozenset(SISTEMA_HOST.values())  # usado pelo painel e pelos logs
+
+
+def abas_vazadas(
+    abas_agora: list[dict],
+    ids_no_inicio: set[str],
+    sufixo: str = SUFIXO_JUDICIAL,
+) -> list[str]:
+    """
+    As abas que a extração abriu e ninguém fechou. Função pura — ver test_runner.py.
+
+    Medido nos logs de 18 e 19/08 na máquina do Henrique: o Chrome começou a
+    rodada com 5 abas e terminou o bloco do PJe com 46, cerca de uma aba a cada
+    dez documentos lidos. A partir daí toda rodada seguinte morria, porque a
+    conexão do Playwright precisa falar com cada aba antes de começar e estourava
+    os 180s. Chrome novo rodava inteiro; Chrome já usado, nunca.
+
+    Três travas para não fechar o que não é nosso:
+    - só o que apareceu DEPOIS do início (o login do operador estava lá antes);
+    - só `type == "page"` (iframe e service worker não se fecham por aqui);
+    - só endereço de tribunal (a pesquisa dele no Google fica em paz).
+    """
+    return [
+        aba.get("id", "")
+        for aba in abas_agora
+        if aba.get("type") == "page"
+        and aba.get("id") not in ids_no_inicio
+        and sufixo in (aba.get("url") or "")
+        and aba.get("id")
+    ]
+
+
+def resumir_abas(abas: list[dict]) -> str:
+    """
+    "46 aba(s) (page 41, iframe 5)" — para o log dizer de que são as abas.
+
+    O total sozinho não basta: se um dia o número voltar a subir depois da
+    limpeza, saber se o que cresceu foi página ou iframe é a diferença entre ter
+    a resposta e abrir outra investigação. Função pura — ver test_runner.py.
+    """
+    if not abas:
+        return "0 aba(s)"
+    tipos: dict[str, int] = defaultdict(int)
+    for aba in abas:
+        tipos[str(aba.get("type") or "?")] += 1
+    detalhe = ", ".join(f"{t} {n}" for t, n in sorted(tipos.items()))
+    return f"{len(abas)} aba(s) ({detalhe})"
 
 
 def chrome_responde() -> bool:
@@ -708,16 +770,27 @@ async def processar_por_sistema(
             return True
 
         print(f"{'='*50}")
-        # Quantas abas o Chrome tem agora. É diagnóstico, não controle: a hipótese
-        # principal para as quedas de CDP de 17/08 é acúmulo de abas (o mesmo que
-        # travou a máquina em 31/07 — ver iniciar._urls_que_faltam), e sem esta
-        # linha a próxima falha volta a ser deduzida de timestamps no banco.
-        print(f"[{sistema}] {total} CNJ(s) — {len(_get_abas_chrome())} aba(s) no Chrome\n")
+        # As abas de agora são a régua da limpeza: tudo o que existir a partir
+        # daqui e for de sistema judicial foi a extração que abriu. Ver
+        # abas_vazadas para as travas.
+        abas_no_inicio = _get_abas_chrome()
+        ids_no_inicio = {a.get("id") for a in abas_no_inicio}
+        print(f"[{sistema}] {total} CNJ(s) — {resumir_abas(abas_no_inicio)} no Chrome\n")
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
+
+            # Limpa as abas que este processo deixou para trás, ANTES de qualquer
+            # desvio abaixo: um processo que deu erro também abriu aba, e sair
+            # pelo `break` sem limpar deixaria o lixo justamente na rodada que
+            # travou. Uma aba a cada dez documentos, e o Chrome do Henrique
+            # chegou a 46 numa rodada só — ver abas_vazadas.
+            vazadas = abas_vazadas(_get_abas_chrome(), ids_no_inicio)
+            if vazadas:
+                fechadas = sum(1 for tid in vazadas if fechar_aba_cdp(tid))
+                print(f"{prefixo} — {fechadas}/{len(vazadas)} aba(s) fechada(s)")
 
             # antes das checagens abaixo de propósito: tentativa que morreu no meio
             # também consumiu tempo. A próxima tentativa sobrescreve o valor.

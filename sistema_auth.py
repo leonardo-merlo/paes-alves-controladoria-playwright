@@ -83,6 +83,23 @@ def _get_abas_chrome() -> list[dict]:
         return []
 
 
+def fechar_aba_cdp(target_id: str) -> bool:
+    """
+    Fecha uma aba pelo endpoint HTTP do Chrome. Devolve se conseguiu.
+
+    Por HTTP, e não pelo Playwright, de propósito: o que trava quando há abas
+    demais é justamente a conexão do Playwright, que precisa falar com cada aba
+    antes de fazer qualquer coisa. Usar ele para limpar seria pedir socorro a
+    quem está afogando. Este caminho é o mesmo do `_get_abas_chrome` e não
+    depende de nada estar saudável.
+    """
+    try:
+        urllib.request.urlopen(f"{CDP_URL}/json/close/{target_id}", timeout=2).close()
+        return True
+    except Exception:
+        return False
+
+
 # ── peças da checagem boa, ainda sem uso ──────────────────────────
 # Campo de senha visível = a página ainda está pedindo login, por mais que o
 # endereço pareça o de dentro do sistema. É a cura para o eProc, o TRF6 e o RUPE,

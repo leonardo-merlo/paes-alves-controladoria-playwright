@@ -105,34 +105,6 @@ lados, junto com o `modo_auto` e a máquina de retentativa de login em
 
 ---
 
-### Por que o Chrome para de responder ao CDP: ainda não medido
-
-**Onde:** máquina do Henrique. Nenhum arquivo específico.
-
-**O quê:** em 17/08/2026 as duas rodadas dele morreram com
-`connect_over_cdp` estourando os 180s (assinatura no banco:
-`duracao_extracao_s = 181`). O que foi corrigido nessa data foi o **estrago** —
-uma falha dessas não condena mais a rodada inteira, e o motivo anterior deixou de
-ser apagado. A **causa** do travamento continua desconhecida.
-
-Candidatos, em ordem de suspeita: acúmulo de abas no perfil
-`C:\ChromeControladoria` (já travou a máquina em 31/07 — ver
-`iniciar._urls_que_faltam`), memória depois dos ~14min de PDF.js do RUPE, e o
-antivírus interceptando a 9222.
-
-**Por que assim:** não reproduz na máquina do Leonardo, e por dois motivos
-independentes — a rede é outra, e o processo pesado do RUPE
-(`2817393-23.2026.8.13.0000`) **só aparece com o login do Henrique**. Sem
-reproduzir, qualquer correção da causa seria chute.
-
-**O que faz voltar a valer a pena:** a próxima falha na máquina dele. Agora
-existem duas coisas que não existiam: `logs/agente-AAAA-MM-DD.log`, com o texto
-real do erro, e a contagem de abas impressa no início de cada sistema. Se o log
-mostrar dezenas de abas, é acúmulo e a correção é fechar aba usada; se mostrar
-três, é memória ou antivírus.
-
----
-
 ### Timeout de 180s do `connect_over_cdp` continua o padrão
 
 **Onde:** `conectar_cdp()` em `pje_extractor.py`, `eproc_extractor.py` e
@@ -205,3 +177,30 @@ tarefa própria, não um reparo de passagem.
 
 **O que faz voltar a valer a pena:** o Henrique reportar que "deu erro" numa
 rodada que na verdade deu certo. Aí o ruído passou a custar diagnóstico.
+
+---
+
+### RESOLVIDO em 19/08 — o Chrome travava por acúmulo de abas
+
+Fica registrado porque a causa custou três dias de investigação e a hipótese
+errada apareceu duas vezes.
+
+**O que era:** cada processo extraído deixava abas abertas, cerca de uma a cada
+dez documentos lidos. Medido nos logs da máquina do Henrique: 5 abas no início da
+rodada, **46** ao fim do bloco do PJe (400 documentos). A partir daí o
+`connect_over_cdp` estourava os 180s, porque ele precisa falar com cada aba antes
+de começar.
+
+**A prova que fechou o caso** foi o identificador da sessão do Chrome no log
+(`ws://.../devtools/browser/<id>`): em 5 rodadas que usaram um Chrome já
+castigado por uma extração grande, 5 morreram; nas 2 que rodaram em Chrome recém
+aberto, 2 completaram. Determinístico, não intermitente.
+
+**O conserto:** `abas_vazadas` + `fechar_aba_cdp`, limpando ao fim de cada
+processo. Por HTTP e não por Playwright — é a conexão do Playwright que trava, e
+usá-la para limpar seria pedir socorro a quem está afogando.
+
+**O que o teste de fumaça pegou e o unitário não:** a regra original só fechava
+abas dos hosts em `SISTEMA_HOST`, e abrir `pje.tjmg.jus.br` termina em
+`sso.cloud.pje.jus.br`. A aba vazada escapava justamente por ter ido para o
+login. A regra virou o sufixo `.jus.br`.

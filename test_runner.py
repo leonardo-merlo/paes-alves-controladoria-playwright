@@ -5,8 +5,10 @@ from runner import (
     MOTIVO_CHROME,
     AVISO_MAX_LINHAS,
     STATUS_TRATADO_MANUAL,
+    abas_vazadas,
     aviso_publicacao_ignorada,
     decidir_chrome_morreu,
+    resumir_abas,
     motivo_de_nao_reinserir,
     duracao_segundos,
     eh_chrome_inacessivel,
@@ -206,6 +208,70 @@ def test_devolucao_cabe_no_campo():
     print("OK devolucao_truncada")
 
 
+# ── limpeza das abas que a extração deixa para trás ───────────────
+# Medido nos logs de 18 e 19/08: 5 abas no início da rodada, 46 no fim do bloco
+# do PJe. A partir daí toda rodada seguinte morria no timeout de 180s.
+
+def _aba(id_, tipo="page", url="https://pje.tjmg.jus.br/pje/x.seam"):
+    return {"id": id_, "type": tipo, "url": url}
+
+
+def test_aba_aberta_pela_extracao_e_fechada():
+    inicio = {"a"}
+    agora = [_aba("a"), _aba("b"), _aba("c")]
+    assert sorted(abas_vazadas(agora, inicio)) == ["b", "c"]
+    print("OK abas_vazadas")
+
+
+def test_aba_que_ja_estava_aberta_nao_e_tocada():
+    # o login do Henrique estava lá antes da rodada e não pode ser fechado
+    agora = [_aba("a"), _aba("b")]
+    assert abas_vazadas(agora, {"a", "b"}) == []
+    print("OK abas_preexistentes")
+
+
+def test_aba_do_henrique_em_outro_site_nao_e_tocada():
+    # ele abriu o Gmail no meio da rodada — não é nossa
+    agora = [_aba("novo", url="https://mail.google.com/")]
+    assert abas_vazadas(agora, set()) == []
+    print("OK aba_de_fora")
+
+
+def test_so_pagina_e_fechada():
+    # iframe e service worker não se fecham por este endpoint
+    agora = [_aba("i", tipo="iframe"), _aba("w", tipo="service_worker"), _aba("p")]
+    assert abas_vazadas(agora, set()) == ["p"]
+    print("OK so_page")
+
+
+def test_todos_os_sistemas_contam_como_judiciais():
+    for url in ("https://eproc1g.tjmg.jus.br/x", "https://pe.tjmg.jus.br/rupe/x",
+                "https://eproc2g.trf6.jus.br/x", "https://tjrj.pje.jus.br/x"):
+        assert abas_vazadas([_aba("n", url=url)], set()) == ["n"], url
+    print("OK hosts_judiciais")
+
+
+def test_aba_que_foi_parar_no_login_do_tribunal_tambem_e_fechada():
+    # medido em 19/08 num Chrome de teste: abrir pje.tjmg.jus.br termina em
+    # sso.cloud.pje.jus.br. Com lista fechada de hosts, a aba vazada escapava
+    # justamente por ter ido para o login — que é onde ela mais para.
+    agora = [_aba("sso", url="https://sso.cloud.pje.jus.br/auth/realms/pje/protocol")]
+    assert abas_vazadas(agora, set()) == ["sso"]
+    print("OK aba_no_sso")
+
+
+def test_resumo_diz_de_que_sao_as_abas():
+    resumo = resumir_abas([_aba("a"), _aba("b"), _aba("i", tipo="iframe")])
+    assert resumo.startswith("3 aba(s)")
+    assert "page 2" in resumo and "iframe 1" in resumo
+    print("OK resumo_abas")
+
+
+def test_resumo_sem_aba_nenhuma():
+    assert resumir_abas([]) == "0 aba(s)"
+    print("OK resumo_vazio")
+
+
 # ── uma falha de CDP não condena a rodada ─────────────────────────
 
 def test_cdp_mudo_condena_na_primeira():
@@ -323,6 +389,14 @@ if __name__ == "__main__":
     test_devolucao_nao_repete_o_mesmo_motivo()
     test_devolucao_nao_empilha_camadas()
     test_devolucao_cabe_no_campo()
+    test_aba_aberta_pela_extracao_e_fechada()
+    test_aba_que_ja_estava_aberta_nao_e_tocada()
+    test_aba_do_henrique_em_outro_site_nao_e_tocada()
+    test_so_pagina_e_fechada()
+    test_todos_os_sistemas_contam_como_judiciais()
+    test_aba_que_foi_parar_no_login_do_tribunal_tambem_e_fechada()
+    test_resumo_diz_de_que_sao_as_abas()
+    test_resumo_sem_aba_nenhuma()
     test_cdp_mudo_condena_na_primeira()
     test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha()
     test_falha_repetida_com_chrome_vivo_ainda_condena()
