@@ -324,6 +324,35 @@ def resumir_motivos(motivos: list[str]) -> str | None:
     return max(contagem.items(), key=lambda par: par[1])[0]
 
 
+# Estado de quem o gestor assumiu na mão pelo painel: sai da fila do robô e a
+# edição passa a ser dele. A fila (ler_cnjs_supabase) já ignora este valor por
+# não estar na lista dela — este nome existe aqui só para a regra de reinserção
+# abaixo poder reconhecê-lo.
+STATUS_TRATADO_MANUAL = "tratado_manual"
+
+# Status de quem já está na fila ou saiu dela por decisão de gente. Reinserir
+# qualquer um destes é errado, por motivos diferentes: 'pendente' já está lá, e
+# 'tratado_manual' foi tirado de propósito.
+STATUS_QUE_NAO_VOLTAM_PARA_A_FILA = ("pendente", STATUS_TRATADO_MANUAL)
+
+
+def motivo_de_nao_reinserir(status_atual: str | None) -> str | None:
+    """
+    Por que este CNJ não deve voltar para a fila ao chegar de novo por e-mail.
+    `None` quando pode voltar. Função pura — ver test_runner.py.
+
+    Existe por causa do 'tratado_manual'. A reinserção grava `pje_status`
+    'pendente' por cima do que estava lá, então uma publicação nova de um
+    processo que o Henrique assumiu na mão desligaria o tratamento manual dele
+    sozinho, sem ninguém pedir e sem aviso nenhum no painel.
+    """
+    if status_atual == "pendente":
+        return "já está pendente"
+    if status_atual == STATUS_TRATADO_MANUAL:
+        return "está sendo tratado na mão pelo gestor"
+    return None
+
+
 def inserir_processos_pendentes(
     entradas: list[dict],
     fonte: str = "manual",
@@ -352,8 +381,9 @@ def inserir_processos_pendentes(
 
         status_atual = existentes.get(cnj)
 
-        if status_atual == "pendente":
-            print(f"  CNJ {cnj} já está pendente — ignorando reinserção")
+        motivo_pular = motivo_de_nao_reinserir(status_atual)
+        if motivo_pular:
+            print(f"  CNJ {cnj} {motivo_pular} — ignorando reinserção")
             continue
 
         duplicata = cnj in vistos

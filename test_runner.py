@@ -3,7 +3,9 @@
 from runner import (
     LIMITE_FALHAS_CDP,
     MOTIVO_CHROME,
+    STATUS_TRATADO_MANUAL,
     decidir_chrome_morreu,
+    motivo_de_nao_reinserir,
     duracao_segundos,
     eh_chrome_inacessivel,
     eh_nada_novo,
@@ -218,6 +220,28 @@ def test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha():
     print("OK chrome_vivo_segue")
 
 
+# ── reinserção por e-mail não desfaz decisão de gente ─────────────
+
+def test_processo_tratado_na_mao_nao_volta_para_a_fila():
+    # publicação nova de um processo que o gestor assumiu na mão desligaria o
+    # tratamento manual dele sozinho, sem aviso — ver spec da edição manual
+    assert motivo_de_nao_reinserir(STATUS_TRATADO_MANUAL) is not None
+    print("OK tratado_manual_nao_reinsere")
+
+
+def test_pendente_continua_sem_ser_reinserido():
+    assert motivo_de_nao_reinserir("pendente") is not None
+    print("OK pendente_nao_reinsere")
+
+
+def test_erro_e_processado_continuam_podendo_voltar():
+    # erro merece nova tentativa amanhã, e processado precisa da pauta nova
+    assert motivo_de_nao_reinserir("erro_browser") is None
+    assert motivo_de_nao_reinserir("processado") is None
+    assert motivo_de_nao_reinserir(None) is None
+    print("OK outros_podem_voltar")
+
+
 def test_falha_repetida_com_chrome_vivo_ainda_condena():
     # o limite existe para não gastar 180s por CNJ contra um Chrome que responde
     # ao HTTP mas não deixa o Playwright anexar — a fila de 20 viraria uma hora
@@ -255,4 +279,7 @@ if __name__ == "__main__":
     test_cdp_mudo_condena_na_primeira()
     test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha()
     test_falha_repetida_com_chrome_vivo_ainda_condena()
+    test_processo_tratado_na_mao_nao_volta_para_a_fila()
+    test_pendente_continua_sem_ser_reinserido()
+    test_erro_e_processado_continuam_podendo_voltar()
     print("Todos os testes passaram.")
