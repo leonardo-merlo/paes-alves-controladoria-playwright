@@ -9,6 +9,7 @@ Uso:
 """
 
 import asyncio
+import re
 import sys
 import time
 from collections import defaultdict
@@ -336,6 +337,46 @@ STATUS_TRATADO_MANUAL = "tratado_manual"
 STATUS_QUE_NAO_VOLTAM_PARA_A_FILA = ("pendente", STATUS_TRATADO_MANUAL)
 
 
+# Quantos avisos de publicação ignorada ficam guardados por processo. Um por dia
+# de pauta, então dez é cerca de duas semanas — o bastante para o Henrique ver
+# que o processo continua se movendo, sem o campo crescer para sempre.
+AVISO_MAX_LINHAS = 10
+
+MARCA_AVISO = "Publicação nova em "
+
+
+def _data_da_pauta(lote_id: str | None) -> str:
+    """DD/MM/AAAA a partir do lote, que vem em qualquer um dos dois formatos."""
+    bruto = (lote_id or "").strip()
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", bruto):
+        return bruto
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", bruto):
+        ano, mes, dia = bruto.split("-")
+        return f"{dia}/{mes}/{ano}"
+    return datetime.now(timezone.utc).astimezone().strftime("%d/%m/%Y")
+
+
+def aviso_publicacao_ignorada(lote_id: str | None, observacoes: str | None) -> str:
+    """
+    O texto de `observacoes` depois de registrar que chegou publicação nova num
+    processo que está sendo tratado na mão. Função pura — ver test_runner.py.
+
+    Sem isto o CNJ era simplesmente pulado e nada dizia que ele tinha chegado: o
+    processo continua andando no tribunal e o Henrique não fica sabendo, porque
+    ele saiu da fila de propósito. O campo já é exibido em três telas do painel
+    (a caixa de aviso da página do processo, a lista da entrada e o cartão do
+    dashboard), então escrever aqui basta — nada muda do outro lado.
+
+    Mais recente primeiro. A mesma pauta não entra duas vezes: uma rodada
+    reprocessada não pode virar dez linhas iguais.
+    """
+    linha = f"{MARCA_AVISO}{_data_da_pauta(lote_id)} — processo tratado na mão, não voltou para a fila."
+    anteriores = [l for l in (observacoes or "").splitlines() if l.strip()]
+    if linha in anteriores:
+        return "\n".join(anteriores)
+    return "\n".join([linha] + anteriores[: AVISO_MAX_LINHAS - 1])
+
+
 def motivo_de_nao_reinserir(status_atual: str | None) -> str | None:
     """
     Por que este CNJ não deve voltar para a fila ao chegar de novo por e-mail.
@@ -365,9 +406,13 @@ def inserir_processos_pendentes(
     _carregar_env()
     client = _get_client()
 
-    res_existentes = client.table("processos").select("numero_cnj, pje_status").execute()
-    existentes: dict[str, str] = {
-        r["numero_cnj"]: r.get("pje_status", "") for r in (res_existentes.data or [])
+    # a linha inteira, e não só o status: quem está sendo tratado na mão recebe um
+    # aviso em `observacoes`, e para isso é preciso saber o que já está escrito lá
+    res_existentes = (
+        client.table("processos").select("numero_cnj, pje_status, observacoes").execute()
+    )
+    existentes: dict[str, dict] = {
+        r["numero_cnj"]: r for r in (res_existentes.data or [])
     }
 
     vistos: set[str] = set()
@@ -379,11 +424,22 @@ def inserir_processos_pendentes(
         if not cnj:
             continue
 
-        status_atual = existentes.get(cnj)
+        linha_atual = existentes.get(cnj) or {}
+        status_atual = linha_atual.get("pje_status")
 
         motivo_pular = motivo_de_nao_reinserir(status_atual)
         if motivo_pular:
             print(f"  CNJ {cnj} {motivo_pular} — ignorando reinserção")
+            # Tratado na mão sai da fila, mas o processo continua andando no
+            # tribunal. Sem este registro o Henrique não teria como saber que
+            # chegou publicação nova — ele deixou de acompanhar pelo painel de
+            # pendências justamente por ter assumido o processo.
+            if status_atual == STATUS_TRATADO_MANUAL:
+                client.table("processos").update({
+                    "observacoes": aviso_publicacao_ignorada(
+                        lote_id, linha_atual.get("observacoes")
+                    )
+                }).eq("numero_cnj", cnj).execute()
             continue
 
         duplicata = cnj in vistos

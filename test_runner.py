@@ -3,7 +3,9 @@
 from runner import (
     LIMITE_FALHAS_CDP,
     MOTIVO_CHROME,
+    AVISO_MAX_LINHAS,
     STATUS_TRATADO_MANUAL,
+    aviso_publicacao_ignorada,
     decidir_chrome_morreu,
     motivo_de_nao_reinserir,
     duracao_segundos,
@@ -234,6 +236,51 @@ def test_pendente_continua_sem_ser_reinserido():
     print("OK pendente_nao_reinsere")
 
 
+def test_aviso_registra_a_pauta_que_chegou():
+    # o processo saiu da fila, mas continua andando no tribunal — sem este
+    # registro nada dizia ao Henrique que chegou publicação nova
+    texto = aviso_publicacao_ignorada("2026-08-19", None)
+    assert "19/08/2026" in texto
+    assert "tratado na mão" in texto
+    print("OK aviso_registra_pauta")
+
+
+def test_aviso_aceita_pauta_no_formato_brasileiro():
+    # lote_id aparece nos dois formatos no banco — ver resolverDataAgrupamento
+    assert "19/08/2026" in aviso_publicacao_ignorada("19/08/2026", None)
+    print("OK aviso_formato_br")
+
+
+def test_aviso_mais_recente_vem_primeiro():
+    antigo = aviso_publicacao_ignorada("2026-08-18", None)
+    novo = aviso_publicacao_ignorada("2026-08-19", antigo)
+    assert novo.splitlines()[0].count("19/08/2026") == 1
+    assert "18/08/2026" in novo
+    print("OK aviso_ordem")
+
+
+def test_aviso_nao_repete_a_mesma_pauta():
+    # rodada reprocessada não pode virar dez linhas iguais
+    uma = aviso_publicacao_ignorada("2026-08-19", None)
+    duas = aviso_publicacao_ignorada("2026-08-19", uma)
+    assert uma == duas
+    print("OK aviso_sem_repeticao")
+
+
+def test_aviso_nao_cresce_para_sempre():
+    texto = None
+    for dia in range(1, 20):
+        texto = aviso_publicacao_ignorada(f"2026-07-{dia:02d}", texto)
+    assert len(texto.splitlines()) == AVISO_MAX_LINHAS
+    print("OK aviso_limitado")
+
+
+def test_aviso_preserva_observacao_que_ja_estava_la():
+    texto = aviso_publicacao_ignorada("2026-08-19", "anotação escrita à mão")
+    assert "anotação escrita à mão" in texto
+    print("OK aviso_preserva_anotacao")
+
+
 def test_erro_e_processado_continuam_podendo_voltar():
     # erro merece nova tentativa amanhã, e processado precisa da pauta nova
     assert motivo_de_nao_reinserir("erro_browser") is None
@@ -282,4 +329,10 @@ if __name__ == "__main__":
     test_processo_tratado_na_mao_nao_volta_para_a_fila()
     test_pendente_continua_sem_ser_reinserido()
     test_erro_e_processado_continuam_podendo_voltar()
+    test_aviso_registra_a_pauta_que_chegou()
+    test_aviso_aceita_pauta_no_formato_brasileiro()
+    test_aviso_mais_recente_vem_primeiro()
+    test_aviso_nao_repete_a_mesma_pauta()
+    test_aviso_nao_cresce_para_sempre()
+    test_aviso_preserva_observacao_que_ja_estava_la()
     print("Todos os testes passaram.")
