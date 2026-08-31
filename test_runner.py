@@ -3,6 +3,9 @@
 from runner import (
     LIMITE_FALHAS_CDP,
     MOTIVO_CHROME,
+    MOTIVO_LOGIN_PENDENTE,
+    MOTIVO_SEM_ABA,
+    motivo_da_falta_de_sessao,
     AVISO_MAX_LINHAS,
     STATUS_TRATADO_MANUAL,
     abas_vazadas,
@@ -149,18 +152,64 @@ def test_duracao_de_processo_instantaneo_e_zero():
     print("OK duracao_zero")
 
 
-def test_rupe_vai_na_frente():
-    # a sessão do RUPE cai antes das outras: ser o último da fila é o que mais
-    # tempo deixa ela envelhecendo
+def test_pje_vai_por_ultimo_porque_a_sessao_dele_aguenta():
+    # 35 processos do eProc nunca foram extraídos entre 19 e 27/08: a vez deles
+    # chegava ~40min depois do login, atrás do bloco longo do PJe. O PJe nunca
+    # perdeu um processo por sessão, então é ele quem espera.
     assert ordenar_sistemas(["pje_tjmg", "eproc_tjmg", "pje_tjmg_2inst"]) == [
-        "pje_tjmg_2inst", "pje_tjmg", "eproc_tjmg",
+        "pje_tjmg_2inst", "eproc_tjmg", "pje_tjmg",
     ]
-    print("OK rupe_na_frente")
+    print("OK pje_por_ultimo")
 
 
-def test_sem_rupe_a_ordem_nao_muda():
+def test_os_dois_eproc_ficam_na_frente_do_pje():
+    assert ordenar_sistemas(["pje_tjmg", "eproc_trf6", "eproc_tjmg"]) == [
+        "eproc_tjmg", "eproc_trf6", "pje_tjmg",
+    ]
+    print("OK eprocs_na_frente")
+
+
+# ── por que faltou sessão: três causas, três frases ───────────────
+# Até 31/08 as três viravam "Login ainda não estava feito", e o Henrique perguntou
+# por que isso aparecia tanto sendo que ele sempre loga. Ele logava mesmo.
+
+def test_rodada_recem_comecada_ainda_e_login_nao_feito():
+    assert motivo_da_falta_de_sessao("sessao_expirada", 1.0) == MOTIVO_LOGIN_PENDENTE
+    print("OK sessao_nunca_existiu")
+
+
+def test_sessao_que_envelheceu_na_fila_nao_e_login_nao_feito():
+    motivo = motivo_da_falta_de_sessao("sessao_expirada", 42.0)
+    assert motivo != MOTIVO_LOGIN_PENDENTE
+    assert "42 min" in motivo and "esperando a vez" in motivo
+    print("OK sessao_envelheceu")
+
+
+def test_sistema_fechado_nao_fala_de_login():
+    motivo = motivo_da_falta_de_sessao(
+        "Nenhuma aba do eProc (eproc1g.tjmg.jus.br) encontrada no Chrome conectado", 45.0
+    )
+    assert motivo == MOTIVO_SEM_ABA
+    assert "login" not in motivo.lower()
+    print("OK sistema_fechado")
+
+
+def test_aba_faltando_vence_o_tempo_de_rodada():
+    # sem aba nenhuma o tempo não importa: a causa é outra
+    assert motivo_da_falta_de_sessao("Nenhuma aba do RUPE", 1.0) == MOTIVO_SEM_ABA
+    print("OK aba_vence_tempo")
+
+
+def test_as_frases_novas_sao_reconhecidas_pelo_resumo():
+    # o agente precisa saber categorizar o que ele mesmo escreve
+    assert resumir_motivos([motivo_da_falta_de_sessao("sessao_expirada", 40.0)]) is not None
+    assert resumir_motivos([MOTIVO_SEM_ABA]) == "o sistema não estava aberto"
+    print("OK frases_categorizadas")
+
+
+def test_sem_prioridade_a_ordem_nao_muda():
     # reordenar o que não precisa só tornaria a rodada difícil de comparar
-    assert ordenar_sistemas(["pje_tjmg", "eproc_tjmg"]) == ["pje_tjmg", "eproc_tjmg"]
+    assert ordenar_sistemas(["pje_tjmg", "pje_tjrj"]) == ["pje_tjmg", "pje_tjrj"]
     print("OK ordem_estavel")
 
 
@@ -367,8 +416,14 @@ if __name__ == "__main__":
     test_motivo_mais_frequente_vence()
     test_sessao_caida_continua_sendo_dita()
     test_sem_motivo_reconhecivel_nao_inventa()
-    test_rupe_vai_na_frente()
-    test_sem_rupe_a_ordem_nao_muda()
+    test_pje_vai_por_ultimo_porque_a_sessao_dele_aguenta()
+    test_os_dois_eproc_ficam_na_frente_do_pje()
+    test_rodada_recem_comecada_ainda_e_login_nao_feito()
+    test_sessao_que_envelheceu_na_fila_nao_e_login_nao_feito()
+    test_sistema_fechado_nao_fala_de_login()
+    test_aba_faltando_vence_o_tempo_de_rodada()
+    test_as_frases_novas_sao_reconhecidas_pelo_resumo()
+    test_sem_prioridade_a_ordem_nao_muda()
     test_rupe_sozinho_continua_sozinho()
     test_zero_documentos_em_extracao_incremental_nao_e_erro()
     test_zero_documentos_na_primeira_extracao_e_erro()

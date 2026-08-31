@@ -36,6 +36,16 @@ MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
                  "abra de novo, faça login e rode outra vez")
 MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
 MOTIVO_LOGIN_PENDENTE = "Login ainda não estava feito quando a extração tentou"
+MOTIVO_SEM_ABA = ("O sistema não estava aberto no Chrome quando chegou a vez dele — "
+                  "use Abrir sistemas antes de Iniciar extração")
+
+# A partir de quantos minutos de rodada uma sessão pode ter morrido sozinha
+# esperando a vez. Abaixo disso, falhar no primeiro processo ainda é a assinatura
+# de "ninguém logou ainda"; acima, é a de "logou e envelheceu".
+# 10 min é folgado de propósito: a sessão mais curta que a gente conhece durou
+# bem mais que isso, e chamar de "envelhecida" uma sessão que nunca existiu seria
+# trocar um diagnóstico errado por outro.
+LIMIAR_SESSAO_ENVELHECIDA_MIN = 10
 
 # Como o motivo antigo é preservado quando o processo volta para a fila. Ver
 # motivo_devolucao — sem isto, devolver à fila apagava o diagnóstico da rodada
@@ -61,7 +71,25 @@ MODOS = (MODO_INTERATIVO, MODO_AUTO, MODO_ASSUMIR_LOGADO)
 # feitos ANTES da extração (ver a ação `abrir_sistemas`), a diferença entre ser o
 # primeiro e ser o último da fila pode ser meia hora de sessão envelhecendo.
 # Os que não estão listados mantêm a ordem em que chegaram.
-PRIORIDADE_SISTEMAS = ["pje_tjmg_2inst"]
+#
+# Os eProc entraram nesta lista em 31/08, na frente do PJe. Medido nos dias 19 a
+# 27/08: **35 processos do eProc nunca foram extraídos uma única vez**, todos
+# devolvidos à fila com "login não estava feito", enquanto o PJe e o RUPE não
+# perderam nenhum. A causa é a ordem: as rodadas duram de 43 a 59 minutos, o
+# bloco do PJe come quase tudo isso, e a vez do eProc chegava ~40 min depois de o
+# Henrique ter logado. O login estava feito — envelheceu esperando.
+#
+# O PJe vai por último porque é quem aguenta: em todos esses dias, nenhum
+# processo dele ficou parado por sessão, mesmo sendo o primeiro a rodar e
+# segurando a fila por 40 minutos. Alguém tem de ser o último; que seja quem tem
+# a sessão mais longa.
+PRIORIDADE_SISTEMAS = [
+    "pje_tjmg_2inst",   # RUPE
+    "eproc_tjmg",
+    "eproc_trf6",
+    "eproc_trf6_2g",
+    "eproc_trf2",
+]
 
 
 # ── helpers locais ────────────────────────────────────────────────
@@ -271,6 +299,36 @@ def resumir_abas(abas: list[dict]) -> str:
     return f"{len(abas)} aba(s) ({detalhe})"
 
 
+def motivo_da_falta_de_sessao(erro: str, minutos_de_rodada: float) -> str:
+    """
+    Por que este sistema não tinha sessão. Função pura — ver test_runner.py.
+
+    Até 31/08 o código escrevia sempre "Login ainda não estava feito", com este
+    raciocínio: falhar já no primeiro processo é a assinatura de ninguém ter
+    logado. Isso era verdade quando a extração começava logo depois do login.
+    Deixou de ser quando o sistema é o terceiro da fila e a vez dele chega 40
+    minutos depois — aí falhar no primeiro significa o CONTRÁRIO: a sessão foi
+    feita e envelheceu esperando.
+
+    E a frase mandava o Henrique conferir justamente o que estava certo. Ele
+    perguntou por que "login não ativo" aparecia tanto sendo que ele sempre loga:
+    ele logava mesmo. Ver a ordem em PRIORIDADE_SISTEMAS, que é a outra metade
+    desta correção.
+
+    "Nenhuma aba" é um terceiro caso, e nada tem a ver com login: o sistema nem
+    chegou a ser aberto no Chrome.
+    """
+    if "Nenhuma aba" in erro:
+        return MOTIVO_SEM_ABA
+    if minutos_de_rodada >= LIMIAR_SESSAO_ENVELHECIDA_MIN:
+        return (
+            f"A sessão caiu esperando a vez: a extração só chegou neste sistema "
+            f"{round(minutos_de_rodada)} min depois de começar — refaça o login "
+            "dele e rode de novo"
+        )
+    return MOTIVO_LOGIN_PENDENTE
+
+
 def chrome_responde() -> bool:
     """
     O Chrome ainda atende no endereço de debug?
@@ -360,6 +418,11 @@ CATEGORIAS_MOTIVO: list[tuple[str, str]] = [
     ("sem_documentos", "os processos não têm documento"),
     ("não tem extrator", "não há extrator para esse tribunal"),
     ("Sistema não implementado", "não há extrator para esse tribunal"),
+    # os dois específicos vêm antes dos genéricos: a sessão que envelheceu na
+    # fila e o sistema que nem foi aberto pedem ações diferentes de "refazer o
+    # login", e juntá-los foi o que escondeu 35 processos do eProc até 31/08.
+    ("sessão caiu esperando a vez", "a sessão envelheceu esperando a vez na fila"),
+    ("não estava aberto no Chrome", "o sistema não estava aberto"),
     ("sessao_expirada", "a sessão caiu"),
     ("Nenhuma aba", "o sistema não estava aberto"),
     ("Chrome parou", "o Chrome não respondeu"),
@@ -732,6 +795,11 @@ async def processar_por_sistema(
     # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
     chrome_morreu = False
     falhas_cdp = 0
+    # Quando a rodada começou. Serve para saber se uma sessão que faltou nunca
+    # existiu ou envelheceu esperando — ver motivo_da_falta_de_sessao — e para o
+    # log registrar em que minuto cada sistema pegou a vez, que é o dado que
+    # falta para saber quanto dura a sessão de cada tribunal.
+    inicio_rodada = time.monotonic()
     # quem voltou para a fila sem ser tentado — set porque o mesmo CNJ pode ser
     # devolvido por dois caminhos (fila do sistema e timeout de login)
     devolvidos: set[str] = set()
@@ -775,7 +843,9 @@ async def processar_por_sistema(
         # abas_vazadas para as travas.
         abas_no_inicio = _get_abas_chrome()
         ids_no_inicio = {a.get("id") for a in abas_no_inicio}
-        print(f"[{sistema}] {total} CNJ(s) — {resumir_abas(abas_no_inicio)} no Chrome\n")
+        minutos = (time.monotonic() - inicio_rodada) / 60
+        print(f"[{sistema}] {total} CNJ(s) — {resumir_abas(abas_no_inicio)} no Chrome "
+              f"— minuto {minutos:.0f} da rodada\n")
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
@@ -816,11 +886,17 @@ async def processar_por_sistema(
                 # deslogado — em 29/07 foram 37 assim, em 1h40. O que não chegou
                 # a ser tentado volta para 'pendente': não é erro, é fila.
                 if i == 1:
-                    # falhar já no primeiro é a assinatura de "ninguém logou
-                    # ainda", não de sessão que caiu. Nada foi extraído, então
-                    # tentar de novo mais tarde não repete trabalho nenhum.
-                    print(f"  [{sistema}] sem sessão ainda — fila devolvida, tentará de novo")
-                    _devolver_a_fila(infos, MOTIVO_LOGIN_PENDENTE)
+                    # Falhar já no primeiro processo é "não havia sessão" — mas
+                    # o porquê depende de quando a vez deste sistema chegou. Ver
+                    # motivo_da_falta_de_sessao: até 31/08 escrevia-se sempre
+                    # "login não estava feito", inclusive quando o login estava
+                    # perfeito e tinha só envelhecido na fila.
+                    motivo = motivo_da_falta_de_sessao(
+                        str((resultado or {}).get("erro") or ""),
+                        (time.monotonic() - inicio_rodada) / 60,
+                    )
+                    print(f"  [{sistema}] sem sessão — {motivo}")
+                    _devolver_a_fila(infos, motivo)
                     return False
                 print(f"  [{sistema}] sessão caiu — devolvendo o resto da fila")
                 _devolver_a_fila(infos[i - 1:], MOTIVO_SESSAO)
