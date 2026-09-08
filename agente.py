@@ -60,6 +60,17 @@ NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
 # bloquear novas rodadas — senão a fila travaria pra sempre após um crash.
 LIMITE_RODADA_ABANDONADA_MIN = 90
 
+# 'Abrir sistemas' não espera login nem processa nada — nas rodadas medidas
+# levou de 3 a 13s. Em 08/09 travou em silêncio (nem erro, nem sucesso, nada
+# gravado) por mais de 30 min: o primeiro passo dela é uma chamada ao Supabase
+# sem limite de tempo, e uma rede engasgada ali prende a função para sempre. O
+# comando ficou 'em_andamento' e o painel travou os dois botões sem nenhum
+# diagnóstico até alguém destravar na mão pelo banco.
+# Este teto é só para essa ação: 'extrair' já tem suas próprias proteções
+# (LIMITE_FALHAS_CDP, o timeout do connect_over_cdp) porque ela é longa de
+# propósito. Aqui não — passar disso é sinal de travamento, não de trabalho.
+TIMEOUT_ABRIR_SISTEMAS_S = 180
+
 # Onde fica a cópia em arquivo do que aparece na janela do agente. Um arquivo por
 # dia, ao lado do código, no .gitignore.
 #
@@ -250,7 +261,18 @@ def processar_um(client) -> bool:
             return True
 
         if acao == ACAO_ABRIR:
-            status, mensagem = _resumo_abertura_para_status(asyncio.run(abrir_sistemas()) or {})
+            try:
+                resultado_abrir = asyncio.run(
+                    asyncio.wait_for(abrir_sistemas(), timeout=TIMEOUT_ABRIR_SISTEMAS_S)
+                )
+            except asyncio.TimeoutError:
+                status, mensagem = "erro", (
+                    f"Abrir sistemas não respondeu em {TIMEOUT_ABRIR_SISTEMAS_S // 60} min "
+                    "— provável travamento na conexão. Feche o Chrome e a janela do agente, "
+                    "e rode atualizar.bat de novo."
+                )
+            else:
+                status, mensagem = _resumo_abertura_para_status(resultado_abrir or {})
         else:
             resumo = asyncio.run(extrair() if acao == ACAO_EXTRAIR else executar_extracao()) or {}
             resumo["reanalisados"] = varrer_sem_rascunho(client)
