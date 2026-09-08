@@ -196,3 +196,28 @@ CREATE POLICY "Usuarios autenticados podem inserir documentos"
   ON public.documentos FOR INSERT TO authenticated WITH CHECK (true);
 CREATE POLICY "Usuarios autenticados podem atualizar documentos"
   ON public.documentos FOR UPDATE TO authenticated USING (true);
+
+-- 9. EVENTOS DA EXTRAÇÃO (observabilidade)
+-- Uma linha por etapa da extração, gravada pelo agente local enquanto roda.
+-- Existe para responder "em que etapa parou e por quê" numa consulta só, em vez
+-- de deduzir cruzando horários de `comandos` com `processos` — ver
+-- docs/consultas-diagnostico.md.
+CREATE TABLE IF NOT EXISTS public.eventos_extracao (
+  id          bigserial   PRIMARY KEY,
+  momento     timestamptz NOT NULL DEFAULT now(),
+  comando_id  uuid,
+  etapa       text        NOT NULL,
+  sistema     text,
+  numero_cnj  text,
+  ok          bool        NOT NULL DEFAULT true,
+  detalhe     text,
+  dados       jsonb
+);
+
+CREATE INDEX IF NOT EXISTS eventos_extracao_momento_idx ON public.eventos_extracao (momento DESC);
+CREATE INDEX IF NOT EXISTS eventos_extracao_comando_idx ON public.eventos_extracao (comando_id, momento);
+CREATE INDEX IF NOT EXISTS eventos_extracao_falha_idx   ON public.eventos_extracao (ok, momento DESC) WHERE ok = false;
+
+ALTER TABLE public.eventos_extracao ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuarios autenticados podem ler eventos"
+  ON public.eventos_extracao FOR SELECT TO authenticated USING (true);

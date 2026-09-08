@@ -38,6 +38,7 @@ from sistema_auth import (
     SISTEMA_HOST,
 )
 from supabase_writer import _get_client, _carregar_env
+import observabilidade as obs
 
 # 127.0.0.1 e não "localhost", pelo mesmo motivo do sistema_auth.py (ver o
 # comentário longo lá). Este arquivo ficou para trás no commit c029469: a espera
@@ -80,15 +81,32 @@ def _urls_que_faltam(urls_por_sistema: dict[str, str]) -> list[str]:
     do Henrique por uma tarde.
     """
     abertas = [aba.get("url", "") for aba in _get_abas_chrome()]
-    faltando: list[str] = []
+    presentes = sistemas_presentes(abertas, list(urls_por_sistema))
+    faltando: list[tuple[str, str]] = []
     for sistema, url in urls_por_sistema.items():
-        host = SISTEMA_HOST.get(sistema, "")
-        if host and any(host in aberta for aberta in abertas):
-            print(f"  {sistema}: aba já aberta — reaproveitando")
+        if sistema in presentes:
+            obs.registrar("abrir.aba_reaproveitada", sistema=sistema,
+                          detalhe="já havia aba aberta deste sistema")
             continue
-        print(f"  {sistema}: {url}")
-        faltando.append(url)
+        faltando.append((sistema, url))
     return faltando
+
+
+def sistemas_presentes(urls_abertas: list[str], sistemas: list[str]) -> set[str]:
+    """
+    Quais destes sistemas já têm aba aberta. Função pura — ver test_iniciar.py.
+
+    A comparação é pelo domínio (`SISTEMA_HOST`), o mesmo valor que os
+    extratores usam para achar a aba deles depois. Tem de ser o mesmo dos dois
+    lados: se o "abrir" considerasse a aba presente por uma régua e o "extrair"
+    não a encontrasse por outra, o sistema seria pulado sem ninguém entender.
+    """
+    return {
+        sistema
+        for sistema in sistemas
+        if (host := SISTEMA_HOST.get(sistema, ""))
+        and any(host in aberta for aberta in urls_abertas)
+    }
 
 
 async def _aguardar_cdp_pronto(tentativas: int = 30, intervalo_s: float = 0.5) -> bool:
@@ -110,15 +128,47 @@ async def abrir_sistemas() -> dict:
     eProc e o RUPE ainda pedem um código que chega por e-mail — qualquer relógio
     correndo aqui só serviria para queimar tentativa.
     """
+    obs.registrar("abrir.inicio", detalhe="pedido de abrir sistemas recebido")
     urls_por_sistema = _coletar_urls_pendentes()
     if not urls_por_sistema:
+        obs.registrar("abrir.fila", detalhe="nenhum processo pendente — nada a abrir")
         print("Nenhum processo pendente. Nada a abrir.")
-        return {"sistemas": [], "cdp_falhou": False}
+        return {"sistemas": [], "cdp_falhou": False, "faltando": []}
 
     sistemas = ordenar_sistemas(list(urls_por_sistema.keys()))
+    obs.registrar("abrir.fila", detalhe=f"sistemas a abrir: {', '.join(sistemas)}",
+                  dados={"sistemas": sistemas})
+
     if not await _abrir_abas(urls_por_sistema):
-        return {"sistemas": sistemas, "cdp_falhou": True}
-    return {"sistemas": sistemas, "cdp_falhou": False}
+        obs.registrar("abrir.fim", ok=False,
+                      detalhe="o Chrome não respondeu à porta de depuração")
+        return {"sistemas": sistemas, "cdp_falhou": True, "faltando": sistemas}
+
+    # A conferência que não existia até 08/09: pedir para abrir e conferir se
+    # abriu são coisas diferentes, e até aqui só a primeira acontecia. O pedido
+    # tem 5s de prazo e pode falhar calado — foi assim que o eProc TJMG chegou
+    # à extração sem aba nenhuma, 24 minutos depois, com o painel garantindo
+    # que tinha aberto.
+    abas = _get_abas_chrome()
+    presentes = sistemas_presentes([a.get("url", "") for a in abas], sistemas)
+    faltando = [s for s in sistemas if s not in presentes]
+    for sistema in sistemas:
+        obs.registrar(
+            "abrir.aba_confirmada",
+            ok=sistema in presentes,
+            sistema=sistema,
+            detalhe=("aba presente no Chrome" if sistema in presentes
+                     else "PEDIDO ACEITO MAS A ABA NÃO ESTÁ LÁ"),
+        )
+    if faltando:
+        obs.registrar("abrir.fim", ok=False,
+                      detalhe=f"sem aba: {', '.join(faltando)} — abertas agora: "
+                              f"{obs.resumir_urls(abas)}",
+                      dados={"faltando": faltando})
+    else:
+        obs.registrar("abrir.fim",
+                      detalhe=f"{len(sistemas)} sistema(s) com aba confirmada")
+    return {"sistemas": sistemas, "cdp_falhou": False, "faltando": faltando}
 
 
 async def extrair() -> dict:
@@ -134,7 +184,12 @@ async def extrair() -> dict:
 
 async def _abrir_abas(urls_por_sistema: dict[str, str]) -> bool:
     """Garante Chrome de pé com uma aba por sistema. Devolve se o CDP respondeu."""
-    chrome_de_pe = bool(_get_abas_chrome())
+    abas_antes = _get_abas_chrome()
+    chrome_de_pe = bool(abas_antes)
+    obs.registrar("abrir.chrome",
+                  detalhe=("Chrome já estava de pé" if chrome_de_pe
+                           else "Chrome não respondeu — vai ser aberto do zero"),
+                  dados={"abas_no_inicio": len(abas_antes)})
     if chrome_de_pe:
         # Chrome de pé = as abas que faltam entram NELE, via CDP. Chamar o
         # chrome.exe aqui subia uma SEGUNDA instância, e as duas ficavam
@@ -144,8 +199,12 @@ async def _abrir_abas(urls_por_sistema: dict[str, str]) -> bool:
         # num e extraía do outro, e falhava com "Nenhuma aba encontrada".
         # Foi o que queimou 15 CNJs na rodada de 14/08.
         print("Chrome já aberto — conferindo quais abas faltam:")
-        for url in _urls_que_faltam(urls_por_sistema):
-            if not abrir_aba_cdp(url):
+        for sistema, url in _urls_que_faltam(urls_por_sistema):
+            aceito = abrir_aba_cdp(url)
+            obs.registrar("abrir.aba_pedida", ok=aceito, sistema=sistema,
+                          detalhe=(f"pedido aceito pelo Chrome: {url}" if aceito
+                                   else f"O CHROME RECUSOU O PEDIDO: {url}"))
+            if not aceito:
                 print(f"  Aviso: não consegui abrir — abra manualmente: {url}")
     else:
         print(f"Abrindo Chrome com {len(urls_por_sistema)} aba(s):")

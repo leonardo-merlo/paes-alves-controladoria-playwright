@@ -22,6 +22,7 @@ from cnj_router import nome_sistema
 from iniciar import abrir_sistemas, extrair, main as executar_extracao
 from reanalisar import listar_sem_rascunho, reanalisar_um
 from supabase_writer import _get_client, _carregar_env
+import observabilidade as obs
 
 INTERVALO_S = 3
 
@@ -250,6 +251,10 @@ def processar_um(client) -> bool:
         return False
 
     print(f"Comando recebido: {acao} ({cid[:8]})")
+    # Daqui até o fim do comando, todo evento registrado fica amarrado a esta
+    # rodada — é o que permite pedir "me mostre a rodada das 20:03 inteira"
+    # numa consulta só.
+    obs.iniciar_rodada(cid)
     try:
         if acao not in ACOES:
             # Painel mais novo que o agente: dizer isso é melhor do que rodar uma
@@ -282,7 +287,10 @@ def processar_um(client) -> bool:
     except Exception as e:  # noqa: BLE001 — agente não pode morrer por um comando
         marcar(client, cid, "erro", f"Erro: {e}")
         print(f"Erro ao executar comando: {e}")
+        obs.registrar("comando.excecao", ok=False, detalhe=f"{type(e).__name__}: {e}")
         traceback.print_exc()
+    finally:
+        obs.encerrar_rodada()
     return True
 
 
@@ -328,6 +336,18 @@ def _resumo_abertura_para_status(resumo: dict) -> tuple[str, str]:
         return "erro", "Não foi possível abrir o navegador (CDP)."
     if not sistemas:
         return "concluido", "Nenhum processo pendente — nada a abrir."
+
+    # Até 08/09 esta frase listava os sistemas que PRECISAVAM ser abertos, não
+    # os que abriram. O eProc TJMG apareceu aqui como aberto, e 24 minutos
+    # depois a extração não achou aba nenhuma dele. Agora quem não abriu é dito
+    # pelo nome, porque é ele que precisa de ação antes de extrair.
+    faltando = resumo.get("faltando") or []
+    abertos = [s for s in sistemas if s not in faltando]
+    if faltando:
+        nomes_faltando = ", ".join(nome_sistema(s) for s in faltando)
+        abriu = (f"Abri {', '.join(nome_sistema(s) for s in abertos)}. " if abertos else "")
+        return "erro", (f"{abriu}NÃO consegui abrir: {nomes_faltando}. "
+                        "Abra manualmente e faça login antes de extrair.")
     nomes = ", ".join(nome_sistema(s) for s in sistemas)
     return "concluido", f"Abri {nomes}. Faça login e clique em Iniciar extração."
 

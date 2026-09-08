@@ -26,9 +26,12 @@ from sistema_auth import (
     monitorar_logins_e_processar,
     fechar_aba_cdp,
     _get_abas_chrome,
+    _avaliar_login,
+    SEM_DETECCAO_DE_LOGIN,
     SISTEMA_HOST,
 )
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
+import observabilidade as obs
 
 INPUTS_DIR = Path("inputs")
 
@@ -327,6 +330,33 @@ def motivo_da_falta_de_sessao(erro: str, minutos_de_rodada: float) -> str:
             "dele e rode de novo"
         )
     return MOTIVO_LOGIN_PENDENTE
+
+
+def estado_de_previvo(abas: list[dict], sistema: str) -> tuple[bool, str]:
+    """
+    O que dá para saber deste sistema antes de começar. Função pura — ver
+    test_runner.py.
+
+    Devolve (tem_aba, frase). Só olha o endereço das abas: é barato (uma
+    chamada HTTP para a rodada inteira) e não depende do Playwright, que é
+    justamente o que trava quando o Chrome está ruim.
+
+    Para eProc e RUPE o endereço não distingue logado de deslogado — está em
+    SEM_DETECCAO_DE_LOGIN, e é fato conhecido, não limitação nova. Nesses casos
+    a frase diz "aba presente, login indeterminável por aqui" em vez de fingir
+    um veredito. Prometer certeza que não existe é como o painel dizia "Abri
+    eProc TJMG" sem ter conferido.
+    """
+    urls = [str(a.get("url") or "") for a in abas if a.get("type") == "page"]
+    host = SISTEMA_HOST.get(sistema, "")
+    minhas = [u for u in urls if host and host in u]
+    if not minhas:
+        return False, "SEM ABA deste sistema no Chrome"
+    if sistema in SEM_DETECCAO_DE_LOGIN:
+        return True, f"aba presente ({len(minhas)}); login não é detectável pelo endereço"
+    logada = any(_avaliar_login(u, sistema, tem_form_login=False) for u in minhas)
+    return True, (f"aba presente ({len(minhas)}) e com cara de logada" if logada
+                  else f"aba presente ({len(minhas)}), mas o endereço é de tela de login")
 
 
 def chrome_responde() -> bool:
@@ -846,11 +876,34 @@ async def processar_por_sistema(
         minutos = (time.monotonic() - inicio_rodada) / 60
         print(f"[{sistema}] {total} CNJ(s) — {resumir_abas(abas_no_inicio)} no Chrome "
               f"— minuto {minutos:.0f} da rodada\n")
+        tem_aba, frase_aba = estado_de_previvo(abas_no_inicio, sistema)
+        obs.registrar("sistema.inicio", ok=tem_aba, sistema=sistema,
+                      detalhe=f"{total} CNJ(s), minuto {minutos:.0f} da rodada — {frase_aba}",
+                      dados={"cnjs": total, "minuto_da_rodada": round(minutos, 1),
+                             "abas_no_chrome": len(abas_no_inicio), "tem_aba": tem_aba})
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
+
+            erro_do_cnj = str((resultado or {}).get("erro") or "")
+            obs.registrar(
+                "cnj.fim", ok=not erro_do_cnj, sistema=sistema,
+                numero_cnj=info.numero_cnj,
+                detalhe=(erro_do_cnj or
+                         f"{(resultado or {}).get('total_documentos', 0)} documento(s)"),
+                dados={"posicao": i, "de": total,
+                       "duracao_s": (resultado or {}).get("duracao_extracao_s")},
+            )
+            # A foto do ambiente no instante da falha. É a linha que faltou em
+            # 08/09: sem ela, "Nenhuma aba do eProc" não diz se a aba nunca
+            # existiu ou se sumiu no caminho, e a diferença muda o conserto.
+            if erro_do_cnj:
+                obs.registrar("cnj.ambiente", ok=False, sistema=sistema,
+                              numero_cnj=info.numero_cnj,
+                              detalhe=f"abertas no Chrome agora: "
+                                      f"{obs.resumir_urls(_get_abas_chrome())}")
 
             # Limpa as abas que este processo deixou para trás, ANTES de qualquer
             # desvio abaixo: um processo que deu erro também abriu aba, e sair
@@ -870,8 +923,17 @@ async def processar_por_sistema(
             if eh_chrome_inacessivel(resultado):
                 falhas_cdp += 1
                 cdp_ok = chrome_responde()
+                obs.registrar("cnj.falha_cdp", ok=False, sistema=sistema,
+                              numero_cnj=info.numero_cnj,
+                              detalhe=f"falha de conexão {falhas_cdp}/{LIMITE_FALHAS_CDP}; "
+                                      f"o Chrome {'respondeu' if cdp_ok else 'NÃO respondeu'} "
+                                      "ao ping simples",
+                              dados={"falhas_cdp": falhas_cdp, "cdp_responde": cdp_ok})
                 if decidir_chrome_morreu(cdp_ok, falhas_cdp):
                     chrome_morreu = True
+                    obs.registrar("rodada.abortada", ok=False, sistema=sistema,
+                                  detalhe="Chrome parou de responder — todos os sistemas "
+                                          "seguintes voltam para a fila sem serem tentados")
                     print(f"  [{sistema}] o Chrome parou de responder — abortando a rodada")
                     print(f"  >>> {MOTIVO_CHROME}")
                     _devolver_a_fila(infos[i - 1:], MOTIVO_CHROME)
@@ -896,6 +958,14 @@ async def processar_por_sistema(
                         (time.monotonic() - inicio_rodada) / 60,
                     )
                     print(f"  [{sistema}] sem sessão — {motivo}")
+                    obs.registrar("sistema.sem_sessao", ok=False, sistema=sistema,
+                                  numero_cnj=info.numero_cnj,
+                                  detalhe=f"falhou já no primeiro processo. Motivo gravado: "
+                                          f"{motivo}",
+                                  dados={"minuto_da_rodada":
+                                         round((time.monotonic() - inicio_rodada) / 60, 1),
+                                         "devolvidos": len(infos),
+                                         "erro_bruto": erro_do_cnj[:300]})
                     _devolver_a_fila(infos, motivo)
                     return False
                 print(f"  [{sistema}] sessão caiu — devolvendo o resto da fila")
@@ -913,6 +983,9 @@ async def processar_por_sistema(
                 motivo = motivo_do_erro(resultado)
                 motivos_erro.append(motivo)
                 marcar_supabase([cnj_id], "erro_browser", motivo)
+        obs.registrar("sistema.fim", sistema=sistema,
+                      detalhe=f"terminou no minuto "
+                              f"{(time.monotonic() - inicio_rodada) / 60:.0f} da rodada")
         print()
         return True
 
@@ -996,6 +1069,24 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     data_str = str(date.today())
 
     print(f"Supabase: {len(cnjs)} CNJ(s) únicos pendentes")
+
+    # Pré-voo: o estado de cada sistema ANTES de processar qualquer coisa.
+    # Custa uma chamada HTTP e responde, no minuto zero, a pergunta que em
+    # 08/09 só apareceu no minuto 26 — quando a vez do eProc TJMG chegou e não
+    # havia aba. Não decide nada e não aborta nada de propósito: mudar
+    # comportamento e ganhar visibilidade na mesma mexida esconderia qual das
+    # duas causou o resultado seguinte.
+    sistemas_da_fila = ordenar_sistemas(sorted({c.sistema for c in cnjs}))
+    abas_previvo = _get_abas_chrome()
+    obs.registrar("previvo.inicio",
+                  detalhe=f"{len(cnjs)} CNJ(s); ordem: {', '.join(sistemas_da_fila)}; "
+                          f"abertas: {obs.resumir_urls(abas_previvo)}",
+                  dados={"cnjs": len(cnjs), "ordem": sistemas_da_fila})
+    for sistema in sistemas_da_fila:
+        tem_aba, frase = estado_de_previvo(abas_previvo, sistema)
+        obs.registrar("previvo.sistema", ok=tem_aba, sistema=sistema, detalhe=frase,
+                      dados={"tem_aba": tem_aba})
+
     ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro, devolvidos = (
         await processar_por_sistema(
             cnjs, data_str, ids_map, corte_map, modo=modo,
@@ -1019,6 +1110,13 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
     na_fila = f", {len(devolvidos)} de volta na fila" if devolvidos else ""
     print(f"Concluído: {extraidos} processados{sem_novidade}, "
           f"{len(ids_erro)} com erro{na_fila}{aviso}")
+    obs.registrar("extrair.fim", ok=bool(extraidos) or not ids_erro,
+                  detalhe=f"{extraidos} processado(s), {len(ids_erro)} com erro, "
+                          f"{len(devolvidos)} de volta na fila",
+                  dados={"total": len(cnjs), "processados": extraidos,
+                         "erros": len(ids_erro), "devolvidos": len(devolvidos),
+                         "sem_novidade": len(ids_nada_novo),
+                         "revisao_manual": len(ids_revisao)})
     return {"total": len(cnjs), "processados": extraidos, "erros": len(ids_erro),
             "revisao_manual": len(ids_revisao), "nada_novo": len(ids_nada_novo),
             "devolvidos": len(devolvidos),
