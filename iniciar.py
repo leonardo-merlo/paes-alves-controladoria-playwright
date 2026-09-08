@@ -150,6 +150,18 @@ async def abrir_sistemas() -> dict:
     # à extração sem aba nenhuma, 24 minutos depois, com o painel garantindo
     # que tinha aberto.
     abas = _get_abas_chrome()
+    if not abas:
+        # Lista vazia aqui não é "nenhuma aba aberta": o CDP acabou de responder
+        # (foi o que deixou o código chegar nesta linha), então lista vazia é
+        # quase certamente uma leitura que falhou. Tratar isso como "faltam
+        # todos os sistemas" gritaria "NÃO consegui abrir nada" com as abas
+        # abertas na frente do Henrique — trocaria uma mentira otimista por uma
+        # pessimista, que não é melhor. Não sei ≠ não tem.
+        obs.registrar("abrir.fim", ok=False,
+                      detalhe="não consegui LER as abas do Chrome para conferir — "
+                              "as abas podem estar abertas; confira na tela")
+        return {"sistemas": sistemas, "cdp_falhou": False, "faltando": []}
+
     presentes = sistemas_presentes([a.get("url", "") for a in abas], sistemas)
     faltando = [s for s in sistemas if s not in presentes]
     for sistema in sistemas:

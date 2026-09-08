@@ -107,6 +107,38 @@ def test_previvo_ignora_aba_que_nao_e_pagina():
     print("OK previvo_ignora_aba_que_nao_e_pagina")
 
 
+
+
+# ── conferência de abertura: "não sei" não pode virar "não tem" ────
+
+def test_leitura_vazia_nao_acusa_todos_os_sistemas():
+    """
+    Se a leitura das abas falha (devolve lista vazia) logo depois de o CDP ter
+    respondido, isso é "não consegui conferir" — não "nenhum sistema abriu".
+    Acusar todos seria trocar uma mentira otimista por uma pessimista.
+    """
+    from iniciar import sistemas_presentes
+    assert sistemas_presentes([], ["eproc_tjmg", "pje_tjmg"]) == set()
+    print("OK leitura_vazia_nao_acusa_todos_os_sistemas")
+
+
+def test_presentes_reconhece_cada_sistema_pelo_dominio():
+    from iniciar import sistemas_presentes
+    urls = ["https://eproc1g.tjmg.jus.br/eproc/", "https://pe.tjmg.jus.br/rupe/x"]
+    assert sistemas_presentes(urls, ["eproc_tjmg", "pje_tjmg_2inst", "pje_tjmg"]) == {
+        "eproc_tjmg", "pje_tjmg_2inst"}
+    print("OK presentes_reconhece_cada_sistema_pelo_dominio")
+
+
+def test_eproc_tjmg_e_trf6_nao_se_confundem():
+    """Os dois eProc moram em domínios parecidos — trocar um pelo outro faria
+    o sistema achar que abriu o que não abriu (o caso de 08/09)."""
+    from iniciar import sistemas_presentes
+    assert sistemas_presentes(["https://eproc1g.trf6.jus.br/eproc/"],
+                              ["eproc_tjmg", "eproc_trf6"]) == {"eproc_trf6"}
+    print("OK eproc_tjmg_e_trf6_nao_se_confundem")
+
+
 if __name__ == "__main__":
     for nome, funcao in sorted(list(globals().items())):
         if nome.startswith("test_"):
