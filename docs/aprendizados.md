@@ -69,6 +69,79 @@ mesmo comando (a trava é atômica), então essa conta continua aberta.
 
 ---
 
+## 09/09/2026 — o eProc voltou, e nenhuma das explicações sobreviveu
+
+Rodada de teste na máquina do Leonardo, com a observabilidade de 08/09 estreando.
+Fila de 73 (35 eProc TJMG, 33 PJe, 5 RUPE). **O eProc TJMG extraiu os 35 pela
+primeira vez desde 19/08** (33 ok, 2 perdidos por bug de gravação). O problema
+que abriu o dia foi embora — e a causa dele continua sem resposta.
+
+**Quatro explicações levantadas e derrubadas no mesmo dia**, três delas do
+Claude. Vale mais que a conclusão, porque cada uma custou uma investigação:
+
+| Hipótese | O que a derrubou |
+|---|---|
+| A aba nunca chegou a abrir | `abrir.aba_confirmada` provou que abriu (10:46:59) |
+| A sessão do eProc expirou | o host sobrevive ao logout — um eProc deslogado continua em `eproc1g.tjmg.jus.br`, e daria "sessão expirada", nunca "Nenhuma aba". Medido no próprio rastro: um login recusado às 10:48:53 ficou no mesmo host |
+| O fallback do PJe roubou a aba | bug real e consertado (65b8019), mas não foi ele: naquela rodada o PJe achou a aba dele |
+| O Chrome descartou a aba por memória | o Henrique/Leonardo olhou a barra de abas: a aba não estava lá. Descarte deixa a aba visível |
+| A limpeza de abas fechou | o vigia provou que o ID da aba nunca mudou entre 11:04 e 12:31 — ela estava protegida por `ids_no_inicio` |
+
+**O que ficou provado:** a aba do eProc estava viva às 12:31:56 e sumiu até
+12:43:52, e nenhum código conhecido pode tê-la fechado nessa janela. A janela é
+exatamente onde o vigia de abas morreu junto com a sessão do Claude. Fica em
+aberto, com a instrumentação que faltava agora no lugar (`abas.limpeza`).
+
+**Sobre "a sessão envelhece esperando a vez":** ficou um piso medido. O login do
+eProc foi às 10:49:57 e o primeiro uso às 11:12:41 — **22 minutos parado, e
+funcionou**. Não prova que aguenta mais; prova que 22 não derruba, o que já
+enfraquece bastante a explicação de que os 26 minutos do RUPE matavam o eProc.
+
+**Achado de negócio, não de código:** 15 dos 33 processos do PJe foram recusados
+com *"o acesso à íntegra dos autos por advogados não vinculados ao processo
+somente é permitido mediante login com certificado digital"*. Quase metade da
+fila do PJe é inacessível com login de usuário e senha. Isso nunca tinha
+aparecido separado porque antes virava "Login não concluído? Verifique".
+
+**A observabilidade nova mordeu a si mesma.** Às 12:07 um `WinError 10054`
+(conexão resetada) desligou a gravação em `eventos_extracao` **para o resto da
+rodada** — comportamento projetado (`_remoto_desligado`), para 200 eventos não
+esperarem timeout. Na prática, um blip de segundos virou 31 minutos de cegueira,
+e o diagnóstico do dia saiu do log local. É o padrão de 08/09 ("avisa quando
+falha, fica mudo quando o avisar falha") acontecendo dentro do módulo escrito
+para acabar com ele. Ver dívida técnica.
+
+**A trava de rodada vence antes da rodada.** `ha_rodada_em_andamento` ignora
+comando com `atualizado_em` mais velho que 90 min, e nada tocava esse campo
+durante a rodada. Com 73 processos a rodada passou de 90 minutos: às 12:42, com
+o PJe em 22/33, a trava venceu **com a extração rodando**. Renovada na mão na
+hora; corrigida em 3aa2ee6 (a rodada bate ponto a cada 5 min).
+
+**Método que funcionou e vale repetir:** antes de gastar a rodada, rodar o
+próprio código que falha (`encontrar_aba_eproc`) contra o Chrome de verdade, sem
+extrair nada. Custou 1 segundo e respondeu o que 25 minutos de rodada
+responderiam. E o vigia de abas — um laço de 4 em 4 segundos registrando só
+mudança de URL — foi o que derrubou duas das hipóteses acima. Nenhum dos dois
+existe no projeto; foram scripts de sessão. Talvez devessem existir.
+
+**Cruzamento com a outra entrada de hoje (dois agentes):** aquela entrada
+descreve dois agentes rodando juntos, cada um fechando as abas "vazadas" que o
+outro acabou de abrir — mecanismo capaz de produzir "Nenhuma aba do eProc" sem
+que a limpeza de nenhum dos dois esteja errada. **Não foi a causa de hoje:**
+conferido na hora pelo processo pai, os dois PIDs de `agente.py` na máquina do
+Leonardo são pai e filho (shim), um agente só. Mas encaixa no histórico: os 35
+processos travados são da máquina do **Henrique**, com `data_ultima_consulta` de
+26/08, e é a máquina onde existiam **dois** registros de inicialização. É a
+primeira explicação que cobre o período inteiro (19/08–26/08) em vez de um
+episódio isolado. Não provada — depende de olhar a máquina dele.
+
+**Decisão de escopo que se pagou:** o Leonardo apontou que deixar o RUPE rodar
+antes (26 min) confundiria "eProc consertado" com "eProc morreu esperando". A
+aba do RUPE foi fechada de propósito para isolar o eProc, e registrado o porquê
+em `eventos_extracao`. Sem isso, o sucesso do eProc às 11:13 seria ambíguo.
+
+---
+
 ## 08/09/2026 — o dia dos três avisos otimistas
 
 Numa rodada só, três etapas diferentes falharam e, nas três, a mensagem que

@@ -237,3 +237,72 @@ usá-la para limpar seria pedir socorro a quem está afogando.
 abas dos hosts em `SISTEMA_HOST`, e abrir `pje.tjmg.jus.br` termina em
 `sso.cloud.pje.jus.br`. A aba vazada escapava justamente por ter ido para o
 login. A regra virou o sufixo `.jus.br`.
+
+---
+
+### A limpeza de abas não recolhe os *workers* que o PJe deixa
+
+**Onde:** `abas_vazadas` (`runner.py`), a trava `aba.get("type") == "page"`.
+
+**O quê:** a limpeza só fecha alvos do tipo `page`. O PJe cria um *worker*
+`blob:` por documento lido e não os recolhe. Medido em 09/09/2026 no meio da
+rodada: 26 alvos no Chrome, sendo **22 workers**; ao fim do bloco do PJe ainda
+havia 15 pendurados, com o Chrome em **5,6 GB / 40 processos**. As abas ficam
+limpas e o consumo sobe assim mesmo.
+
+**Por que assim:** a trava do `page` existe por um motivo bom — iframe e service
+worker não se fecham por CDP do mesmo jeito, e a regra foi escrita para nunca
+fechar o que não é aba de verdade. Recolher worker é outro problema: precisa
+saber quais são descartáveis, e fechar o worker errado quebra a página viva que
+depende dele. Não foi tentado.
+
+**O que faz mudar de ideia:** se voltar a aparecer rodada que morre de exaustão
+no Chrome (o sintoma de 18–19/08, "Chrome já usado nunca roda inteiro") mesmo
+com as abas limpas. Hoje o dado de memória existe mas ninguém mediu o efeito
+sobre a duração da rodada.
+
+---
+
+### Um blip de rede cega o registro remoto pela rodada inteira
+
+**Onde:** `_remoto_desligado` em `observabilidade.py`.
+
+**O quê:** a primeira falha de gravação desliga `eventos_extracao` até o fim da
+rodada. Em 09/09/2026, às 12:07, um `WinError 10054` (conexão resetada) apagou o
+registro remoto por **31 minutos** — o resto do bloco do PJe inteiro. O
+diagnóstico do dia teve de sair do log local, que é justamente o que a tabela
+existe para evitar (o Leonardo investiga de outra máquina).
+
+**Por que assim:** o desligamento existe por uma razão real e medida — sem ele,
+uma rede caída faz cada um dos ~200 eventos esperar o timeout do Supabase, e o
+registro vira o motivo de a rodada demorar o dobro. Trocar isso por "tenta
+sempre" só inverte o defeito.
+
+**O que faz mudar de ideia:** já vale. O desenho mais barato é desligar por
+tempo, não pela rodada: parar por 2 minutos e voltar a tentar (com um evento
+dizendo que ficou cego e por quanto tempo). Um blip custa 2 minutos de buraco em
+vez de uma rodada inteira, e uma rede realmente caída continua não travando
+nada. O que não pode continuar é a cegueira ser silenciosa e permanente.
+
+---
+
+### Por que a aba do eProc sumiu em 09/09 continua sem resposta
+
+**Onde:** desconhecido — é esse o problema.
+
+**O quê:** na rodada de 09/09 a aba do eProc estava viva às 12:31:56 (ID
+inalterado desde 11:04, comprovado por vigia externo) e não existia mais às
+12:43:52. Nenhum código conhecido pode tê-la fechado: a limpeza protege por
+`ids_no_inicio` e o ID dela estava lá; o fallback do PJe não disparou (o PJe
+achou a aba dele); não foi descarte do Chrome (a aba não estava na barra); e
+havia **um** agente só na máquina, conferido pelo processo pai. Ver
+`aprendizados.md`, entrada de 09/09.
+
+**Por que assim:** a janela de 12 minutos em que aconteceu é exatamente onde o
+vigia de abas morreu. Não sobrou evidência, e inventar uma quinta hipótese sem
+ela seria repetir o que já falhou quatro vezes no mesmo dia.
+
+**O que faz mudar de ideia:** a instrumentação que faltava entrou em 3aa2ee6
+(`abas.limpeza` diz qual aba foi fechada, no log e no banco). Na próxima
+ocorrência a pergunta se responde por consulta. Até lá, isto fica registrado
+como aberto — não como resolvido pelos consertos do mesmo dia, que são outros.
