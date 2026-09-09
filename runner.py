@@ -285,6 +285,33 @@ def abas_vazadas(
     ]
 
 
+def descrever_abas(abas: list[dict], ids: list[str], limite: int = 8) -> str:
+    """
+    Os endereços das abas com estes ids. Função pura — ver test_runner.py.
+
+    Existe por causa de 09/09/2026. A limpeza escrevia só "1/1 aba(s)
+    fechada(s)" — quantas, nunca quais. Naquela rodada a aba do eProc sumiu do
+    Chrome dentro da mesma janela de tempo em que a limpeza rodou, e essa linha
+    não permitiu nem confirmar nem descartar que tinha sido ela: a investigação
+    parou ali, com a pergunta em aberto e nenhum caminho para respondê-la a não
+    ser esperar acontecer de novo.
+
+    Contar não serve para nada depois do fato. Dizer quais responde na hora.
+
+    Um id que sumiu entre a leitura e o fechamento vira texto explícito em vez
+    de desaparecer da lista: some da lista é indistinguível de nunca ter estado
+    nela, que é exatamente o tipo de silêncio que este projeto já pagou caro.
+    """
+    if not ids:
+        return "nenhuma"
+    por_id = {a.get("id"): (a.get("url") or "?") for a in abas}
+    urls = [por_id.get(i) or f"(id {i} sumiu antes do fechamento)" for i in ids]
+    mostradas = urls[:limite]
+    sobra = len(urls) - len(mostradas)
+    texto = " | ".join(mostradas)
+    return f"{texto} (+{sobra})" if sobra > 0 else texto
+
+
 def resumir_abas(abas: list[dict]) -> str:
     """
     "46 aba(s) (page 41, iframe 5)" — para o log dizer de que são as abas.
@@ -910,10 +937,22 @@ async def processar_por_sistema(
             # pelo `break` sem limpar deixaria o lixo justamente na rodada que
             # travou. Uma aba a cada dez documentos, e o Chrome do Henrique
             # chegou a 46 numa rodada só — ver abas_vazadas.
-            vazadas = abas_vazadas(_get_abas_chrome(), ids_no_inicio)
+            abas_agora = _get_abas_chrome()
+            vazadas = abas_vazadas(abas_agora, ids_no_inicio)
             if vazadas:
-                fechadas = sum(1 for tid in vazadas if fechar_aba_cdp(tid))
-                print(f"{prefixo} — {fechadas}/{len(vazadas)} aba(s) fechada(s)")
+                fechadas = [tid for tid in vazadas if fechar_aba_cdp(tid)]
+                print(f"{prefixo} — {len(fechadas)}/{len(vazadas)} aba(s) fechada(s)")
+                # QUAIS, não quantas: ver descrever_abas. Sem esta linha, a
+                # limpeza é o único ponto do projeto que fecha aba e o único que
+                # não deixa rastro do que fechou — e foi exatamente a suspeita
+                # que não deu para confirmar nem descartar em 09/09.
+                obs.registrar(
+                    "abas.limpeza", ok=len(fechadas) == len(vazadas),
+                    sistema=sistema, numero_cnj=info.numero_cnj,
+                    detalhe=f"fechadas: {descrever_abas(abas_agora, fechadas)}",
+                    dados={"pedidas": len(vazadas), "fechadas": len(fechadas),
+                           "protegidas": len(ids_no_inicio)},
+                )
 
             # antes das checagens abaixo de propósito: tentativa que morreu no meio
             # também consumiu tempo. A próxima tentativa sobrescreve o valor.

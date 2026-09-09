@@ -39,6 +39,28 @@ def _build_responsavel_map(client: Client) -> dict[str, str]:
     return mapa
 
 
+def _chave_responsavel(nome: str | None) -> str:
+    """
+    A chave para procurar o responsável no mapa. Função pura — ver
+    test_supabase_writer.py.
+
+    Existe por causa de 09/09/2026. Aqui havia
+    `analise.get("responsavel_sugerido", "")`, e o padrão do `get` só vale
+    quando a CHAVE FALTA. Quando o Claude devolve a chave presente com `null` —
+    que é o normal para um processo sem responsável claro — o `get` devolve
+    None e o `.lower()` seguinte estoura com AttributeError.
+
+    O estrago não era o erro em si, era onde ele acontecia: no fim da linha.
+    Três processos daquela rodada foram lidos por inteiro e analisados pelo
+    Claude (um deles com 60 documentos) e tiveram o resultado descartado na hora
+    de gravar, voltando para a fila para pagar extração e análise de novo.
+
+    Nome ausente é caso normal, não erro: `responsavel_id` fica nulo e o campo
+    nem chega a ir para o banco (ver a remoção de nulos em _upsert_processo).
+    """
+    return (nome or "").strip().lower()
+
+
 def _carregar_env() -> None:
     env_file = Path(__file__).parent / ".env"
     if env_file.exists():
@@ -78,9 +100,10 @@ def _upsert_processo(client: Client, numero_cnj: str, resultado: dict, analise: 
     Insere ou atualiza o processo no Supabase.
     Retorna o UUID do processo.
     """
-    responsavel_nome = analise.get("responsavel_sugerido", "")
     responsavel_map = _build_responsavel_map(client)
-    responsavel_id = responsavel_map.get(responsavel_nome.lower())
+    responsavel_id = responsavel_map.get(
+        _chave_responsavel(analise.get("responsavel_sugerido"))
+    )
 
     data = {
         "numero_cnj":          numero_cnj,
@@ -185,9 +208,10 @@ def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
     """
     Insere ou atualiza o rascunho de análise no Supabase.
     """
-    responsavel_nome = analise.get("responsavel_sugerido", "")
     responsavel_map = _build_responsavel_map(client)
-    responsavel_id = responsavel_map.get(responsavel_nome.lower())
+    responsavel_id = responsavel_map.get(
+        _chave_responsavel(analise.get("responsavel_sugerido"))
+    )
 
     data = _montar_linha_rascunho(
         processo_id, analise, responsavel_id,

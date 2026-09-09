@@ -14,6 +14,7 @@ Uso:
 import asyncio
 import sys
 import time
+import threading
 import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -60,6 +61,10 @@ NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
 # que isto é tratado como rodada abandonada (agente caiu no meio) e deixa de
 # bloquear novas rodadas — senão a fila travaria pra sempre após um crash.
 LIMITE_RODADA_ABANDONADA_MIN = 90
+
+# De quanto em quanto tempo a rodada avisa que ainda está viva (ver _bater_ponto).
+# Bem menor que o limite acima: um batimento perdido não pode custar a trava.
+INTERVALO_BATIMENTO_S = 5 * 60
 
 # 'Abrir sistemas' não espera login nem processa nada — nas rodadas medidas
 # levou de 3 a 13s. Em 08/09 travou em silêncio (nem erro, nem sucesso, nada
@@ -189,6 +194,43 @@ def buscar_pendentes(client) -> list[dict]:
     return res.data or []
 
 
+def _bater_ponto(comando_id: str, parar: threading.Event) -> None:
+    """
+    Renova `atualizado_em` do comando enquanto a rodada está acontecendo.
+
+    Existe por causa de 09/09/2026. `ha_rodada_em_andamento` ignora comandos com
+    `atualizado_em` mais velho que LIMITE_RODADA_ABANDONADA_MIN, e nada tocava
+    esse campo entre o claim e o desfecho — então **toda rodada mais longa que o
+    limite deixava de segurar a própria trava, ainda rodando**. A constante
+    assume "20-45min"; naquele dia a fila tinha 73 processos e a rodada passou
+    de 90 minutos. A trava venceu às 12:42 com o PJe no processo 22 de 33, e a
+    partir dali qualquer clique em Iniciar extração subiria uma SEGUNDA rodada
+    mexendo nas mesmas abas do mesmo Chrome. Foi renovada na mão para o teste
+    daquele dia não virar exatamente isso.
+
+    Cliente próprio de propósito: este é o único código que roda fora da thread
+    principal, e dividir o cliente com a extração seria criar um problema de
+    concorrência bem no lugar que existe para evitar um.
+
+    O update é condicionado a 'em_andamento': se o comando já terminou, ou foi
+    marcado com erro, o batimento não ressuscita nada.
+
+    Falhar aqui nunca derruba a rodada — mesma regra da observabilidade: quem
+    registra é testemunha, não juiz.
+    """
+    try:
+        client = _get_client()
+    except Exception:  # noqa: BLE001 — sem cliente, sem batimento; a rodada segue
+        return
+    while not parar.wait(INTERVALO_BATIMENTO_S):
+        try:
+            client.table("comandos").update(
+                {"atualizado_em": datetime.now(timezone.utc).isoformat()}
+            ).eq("id", comando_id).eq("status", "em_andamento").execute()
+        except Exception:  # noqa: BLE001 — ver o docstring
+            pass
+
+
 def marcar(client, comando_id: str, status: str, mensagem: str | None = None) -> None:
     update: dict = {
         "status": status,
@@ -255,6 +297,11 @@ def processar_um(client) -> bool:
     # rodada — é o que permite pedir "me mostre a rodada das 20:03 inteira"
     # numa consulta só.
     obs.iniciar_rodada(cid)
+    parar_batimento = threading.Event()
+    batimento = threading.Thread(
+        target=_bater_ponto, args=(cid, parar_batimento), daemon=True
+    )
+    batimento.start()
     try:
         if acao not in ACOES:
             # Painel mais novo que o agente: dizer isso é melhor do que rodar uma
@@ -290,6 +337,7 @@ def processar_um(client) -> bool:
         obs.registrar("comando.excecao", ok=False, detalhe=f"{type(e).__name__}: {e}")
         traceback.print_exc()
     finally:
+        parar_batimento.set()
         obs.encerrar_rodada()
     return True
 

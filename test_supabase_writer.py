@@ -1,7 +1,7 @@
 """test_supabase_writer.py — testes da montagem da linha de rascunho.
 Rodar: python test_supabase_writer.py"""
 
-from supabase_writer import _montar_linha_rascunho
+from supabase_writer import _montar_linha_rascunho, _chave_responsavel
 
 QUANDO = "2026-08-06T12:00:00+00:00"
 
@@ -43,8 +43,34 @@ def test_custo_zero_nao_e_descartado_como_ausente():
     print("OK custo_zero_sobrevive")
 
 
+def test_chave_responsavel_nome_normal():
+    assert _chave_responsavel("Henrique") == "henrique"
+    print("OK chave_responsavel_nome_normal")
+
+
+def test_chave_responsavel_nulo_nao_estoura():
+    """O bug de 09/09: chave presente com null derrubava a gravacao inteira."""
+    assert _chave_responsavel(None) == ""
+    print("OK chave_responsavel_nulo_nao_estoura")
+
+
+def test_chave_responsavel_vazio_e_espaco():
+    assert _chave_responsavel("") == ""
+    assert _chave_responsavel("   ") == ""
+    print("OK chave_responsavel_vazio_e_espaco")
+
+
+def test_chave_responsavel_ignora_espaco_em_volta():
+    assert _chave_responsavel("  Julia  ") == "julia"
+    print("OK chave_responsavel_ignora_espaco_em_volta")
+
+
 if __name__ == "__main__":
     test_linha_carrega_tokens_e_custo()
     test_analise_antiga_sem_custo_nao_quebra()
     test_custo_zero_nao_e_descartado_como_ausente()
+    test_chave_responsavel_nome_normal()
+    test_chave_responsavel_nulo_nao_estoura()
+    test_chave_responsavel_vazio_e_espaco()
+    test_chave_responsavel_ignora_espaco_em_volta()
     print("Todos os testes passaram.")

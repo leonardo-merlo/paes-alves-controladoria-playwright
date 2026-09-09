@@ -9,6 +9,7 @@ from runner import (
     AVISO_MAX_LINHAS,
     STATUS_TRATADO_MANUAL,
     abas_vazadas,
+    descrever_abas,
     aviso_publicacao_ignorada,
     decidir_chrome_morreu,
     resumir_abas,
@@ -411,6 +412,39 @@ def test_falha_repetida_com_chrome_vivo_ainda_condena():
     print("OK falha_repetida_condena")
 
 
+def test_descrever_abas_diz_qual_foi_fechada():
+    """O que faltava em 09/09: a linha dizia quantas, nunca quais."""
+    abas = [_aba("a", url="https://eproc1g.tjmg.jus.br/eproc/painel"),
+            _aba("b", url="https://pje.tjmg.jus.br/pje/doc")]
+    assert descrever_abas(abas, ["b"]) == "https://pje.tjmg.jus.br/pje/doc"
+    print("OK descrever_abas_diz_qual_foi_fechada")
+
+
+def test_descrever_abas_lista_todas_na_ordem():
+    abas = [_aba("a", url="url-a"), _aba("b", url="url-b")]
+    assert descrever_abas(abas, ["a", "b"]) == "url-a | url-b"
+    print("OK descrever_abas_lista_todas_na_ordem")
+
+
+def test_descrever_abas_sem_nenhuma():
+    assert descrever_abas([_aba("a")], []) == "nenhuma"
+    print("OK descrever_abas_sem_nenhuma")
+
+
+def test_descrever_abas_id_que_sumiu_nao_some_da_linha():
+    """Sumir da lista seria indistinguivel de nunca ter estado nela."""
+    texto = descrever_abas([_aba("a", url="url-a")], ["z"])
+    assert "z" in texto and "sumiu" in texto, texto
+    print("OK descrever_abas_id_que_sumiu_nao_some_da_linha")
+
+
+def test_descrever_abas_corta_lista_longa_dizendo_quanto_sobrou():
+    abas = [_aba(str(i), url=f"url-{i}") for i in range(12)]
+    texto = descrever_abas(abas, [str(i) for i in range(12)], limite=8)
+    assert texto.endswith("(+4)"), texto
+    print("OK descrever_abas_corta_lista_longa_dizendo_quanto_sobrou")
+
+
 if __name__ == "__main__":
     test_certificado_nao_vira_pergunta_sobre_login()
     test_motivo_mais_frequente_vence()
@@ -464,4 +498,9 @@ if __name__ == "__main__":
     test_aviso_nao_repete_a_mesma_pauta()
     test_aviso_nao_cresce_para_sempre()
     test_aviso_preserva_observacao_que_ja_estava_la()
+    test_descrever_abas_diz_qual_foi_fechada()
+    test_descrever_abas_lista_todas_na_ordem()
+    test_descrever_abas_sem_nenhuma()
+    test_descrever_abas_id_que_sumiu_nao_some_da_linha()
+    test_descrever_abas_corta_lista_longa_dizendo_quanto_sobrou()
     print("Todos os testes passaram.")
