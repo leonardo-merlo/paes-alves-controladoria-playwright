@@ -8,6 +8,10 @@ from playwright.async_api import async_playwright, Browser, Page, Playwright
 
 CDP_URL = "http://127.0.0.1:9222"
 PJE_URL = "https://pje.tjmg.jus.br/pje/Processo/ConsultaProcesso/listView.seam"
+# Os endereços que são do PJe. O SSO entra porque a aba do PJe fica nele antes
+# do login (medido em 09/09/2026 às 10:47:26) — sem ele, o PJe não reconhece a
+# própria aba. O principal vem primeiro: ver encontrar_aba_pje.
+PJE_HOSTS = ("pje.tjmg.jus.br", "sso.cloud.pje.jus.br")
 TIMEOUT = 20_000
 MAX_DOCS = 300
 
@@ -40,15 +44,32 @@ async def conectar_cdp() -> tuple[Playwright, Browser]:
 
 
 async def encontrar_aba_pje(browser: Browser) -> Page:
-    for ctx in browser.contexts:
-        for page in ctx.pages:
-            if "pje.tjmg.jus.br" in page.url:
-                return page
-    # fallback: primeira aba disponível
-    for ctx in browser.contexts:
-        if ctx.pages:
-            return ctx.pages[0]
-    raise RuntimeError("Nenhuma aba disponível no Chrome conectado")
+    """
+    A aba do PJe — e só ela. Ver test_pje_extractor.py.
+
+    Até 09/09/2026 havia aqui um fallback que devolvia `ctx.pages[0]` quando não
+    achava aba do PJe: uma aba qualquer, de qualquer sistema. Quem recebe a aba
+    chama verificar_sessao, que faz `page.goto(PJE_URL)` — então o fallback não
+    usava a aba do vizinho, ele a **destruía**. É o único ponto do projeto capaz
+    de fazer a aba de outro sistema sumir do Chrome, e "Nenhuma aba do eProc"
+    segurou 35 processos de 19/08 a 09/09.
+
+    O fallback disparava porque a busca só reconhecia `pje.tjmg.jus.br`, e antes
+    do login a aba do PJe fica no SSO — logo o PJe não achava a própria aba e
+    pegava a do vizinho. Por isso o SSO entrou na lista junto com a remoção do
+    fallback: tirar só o fallback deixaria o PJe sem achar a aba dele.
+
+    A ordem dos hosts importa: o principal vem primeiro porque uma aba já logada
+    vale mais que uma do SSO que tenha ficado para trás na janela.
+    """
+    for host in PJE_HOSTS:
+        for ctx in browser.contexts:
+            for page in ctx.pages:
+                if host in page.url:
+                    return page
+    raise RuntimeError(
+        f"Nenhuma aba do PJe ({PJE_HOSTS[0]}) encontrada no Chrome conectado"
+    )
 
 
 async def verificar_sessao(page: Page) -> bool:
