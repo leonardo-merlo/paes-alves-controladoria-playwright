@@ -8,6 +8,39 @@ Cada item diz o que foi adiado, por quê, e o que faz voltar a valer a pena mexe
 
 ---
 
+### `atualizar.bat` mata rodada em andamento e orfana o comando
+
+**Onde:** `atualizar.bat`, o `Stop-Process -Force` que derruba o `agente.py`
+antes de aplicar a atualização.
+
+**O quê:** o script mata o agente sem cerimônia, sem checar se há rodada
+acontecendo. Se rodar durante uma extração, o processo morre entre reivindicar
+o comando e escrever o desfecho — e o comando fica `em_andamento` para sempre,
+**sem nenhuma exceção gravada, porque não houve exceção: houve morte**. O painel
+então trava os dois botões até os 90 minutos de abandono passarem, e destravar
+antes disso exige SQL na mão.
+
+É a hipótese mais forte para o travamento de 08/09/2026 às 15:46 (comando pego
+em 0,8s, nunca mais atualizado, bloco de erro vazio) — ver `aprendizados.md`.
+Não está provado: exigiria a máquina do Henrique no instante exato.
+
+**Por que assim:** em 09/09 foi corrigido o defeito vizinho (o script abria uma
+segunda janela do agente), que era barato e não mexia em comportamento. Este
+aqui mexe: qualquer conserto tem de decidir o que fazer quando alguém pede
+atualização no meio de uma extração de 40 minutos — esperar (e frustrar quem
+clicou), recusar (e exigir que ele saiba voltar depois), ou matar e encerrar o
+comando direito antes de morrer. São três produtos diferentes, e a escolha é do
+Leonardo, não do código. Adiado de propósito em 09/09, com o teste na máquina do
+Leonardo em andamento e sem tempo para essa decisão.
+
+**O que faz mudar de ideia:** já vale. O caminho mais barato e menos invasivo é
+o terceiro: antes de matar, o script encerra o comando ativo no banco com um
+motivo honesto ("atualização interrompeu esta rodada — pode rodar de novo").
+Isso não decide nada pelo usuário e elimina o comando órfão, que é o dano real.
+Os outros dois desenhos podem esperar.
+
+---
+
 ### Regra de roteamento CNJ existe em duas linguagens
 
 **Onde:** `cnj_router.py` (agente) e `lib/cnj.ts` (painel, repo
