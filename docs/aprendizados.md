@@ -11,22 +11,43 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 O Henrique tinha **duas janelas pretas** do agente abertas. O certo é uma.
 
-**Como acontece:** o `atualizar.bat` mata o python à força, espera, e se não vir
-python de volta abre um vigia novo. Só que ele *confere python* e *abre vigia* —
-coisas diferentes, e nunca checava se já havia vigia aberto. O vigia que já
-estava no ar espera 10s antes de religar, e o python leva mais alguns segundos
-para subir (Playwright, Supabase). Passando dos 15s de espera, o script concluía
-"não voltou" e abria a segunda janela. Corrida de tempo: às vezes dá, às vezes
-não — por isso ninguém tinha percebido o padrão.
+**Correção do mesmo dia:** minha primeira explicação foi o `atualizar.bat`
+abrindo uma janela extra numa corrida de tempo. **Estava errada.** O Henrique
+depois esclareceu que as duas janelas abrem **ao ligar o computador**, sem
+ninguém rodar nada — ou seja, são dois registros de inicialização automática,
+não um efeito do script de atualização.
 
-Corrigido em 09/09: espera 30s e confere vigia **ou** python antes de abrir
-qualquer coisa.
+A causa real: existem **dois scripts que fazem a mesma coisa** — `agente.bat`
+(laço de 5s) e `agente-watchdog.bat` (laço de 10s, e ainda sobe o Chrome). Os
+dois chamam `agente.py`, os dois se reiniciam sozinhos. Registrar os dois na
+inicialização dá exatamente duas janelas. Na máquina do Leonardo há **um**
+registro só (Tarefa Agendada apontando para o watchdog), que é o esperado.
 
-**Por que importa mais do que parece:** duas janelas abertas em momentos
-diferentes rodam **versões diferentes do código**, e qual delas pega o comando é
-sorteio (a trava é atômica, então não há execução dupla — mas há execução pela
-versão errada). É o tipo de defeito que faz um problema aparecer e sumir sem
-explicação.
+O defeito que eu tinha achado no `atualizar.bat` é real e foi corrigido (ele
+conferia python e abria vigia — coisas diferentes), mas **não era a causa
+disto**. Vale como conserto próprio, não como explicação.
+
+**Por que importa mais do que parece — e aqui está o achado sério:** a trava
+que impede dois agentes de rodarem ao mesmo tempo (`ha_rodada_em_andamento`)
+ignora comando parado há mais de 90 minutos, tratando como rodada abandonada. E
+`atualizado_em` **só é escrito duas vezes**: quando o comando é reivindicado e
+quando termina. Nada durante a rodada.
+
+Ou seja: **rodada que passe de 90 minutos vira invisível para o segundo
+agente**, que então inicia uma segunda extração — no mesmo Chrome, com as duas
+mexendo nas mesmas abas e cada uma fechando as abas "vazadas" que a outra
+acabou de abrir. Com um agente só isso nunca podia acontecer. Com dois, é
+questão de a rodada ser longa o bastante — e já houve dia com mais de 6 horas
+de extração.
+
+Não está provado que causou o eProc TJMG sem aba, mas é o primeiro mecanismo
+encontrado que explicaria uma aba sumir no meio da rodada. O conserto de fundo é
+o batimento: o agente escrever `atualizado_em` periodicamente enquanto trabalha,
+para "está vivo" e "está parado" deixarem de ser indistinguíveis.
+
+Ferramenta criada no mesmo dia: `conferir-janelas.bat` (duplo-clique) relata
+todos os pontos de inicialização automática da máquina para o Supabase, sem
+alterar nada.
 
 **A hipótese que isso abre para o travamento de 08/09:** aquele `Stop-Process
 -Force` mata o agente sem cerimônia, no meio do que ele estiver fazendo. Se
