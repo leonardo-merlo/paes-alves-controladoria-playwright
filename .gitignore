@@ -29,3 +29,7 @@ AGENTE-PAUSADO.txt
 
 # saída do agente, uma por dia — ver agente.ligar_log
 logs/
+
+# Atalhos de inicializacao que o Henrique desativou na maquina dele.
+# Ficam guardados para dar para voltar atras — nao pertencem ao repositorio.
+inicializacao-desativada/
