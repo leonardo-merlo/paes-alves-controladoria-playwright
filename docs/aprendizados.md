@@ -7,6 +7,63 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 ---
 
+## 11/09/2026 — a limpeza fechou a aba do eProc, e agora está provado
+
+Rodada na máquina do Henrique, a primeira depois de tirar o registro de
+inicialização duplicado (10/09) e de o watchdog parar de pré-abrir o Chrome.
+Fila de 100: RUPE 18, eProc TJMG 17, TRF6 7, PJe 57, 1 sem sistema.
+
+**O "Abrir sistemas" caiu no caminho frio pela primeira vez nesta máquina**
+("Chrome não respondeu — vai ser aberto do zero"), com as 4 abas confirmadas em
+14s. É o efeito esperado de fd0f629.
+
+**A aba do eProc TJMG sumiu de novo — e desta vez o rastro diz quem fechou.**
+Às 15:56:49, logo após o 5º processo (`1002853-61`), o `abas.limpeza` fechou
+`eproc1g.tjmg.jus.br/...processo_selecionar&num_processo=1002853...` — a página
+do próprio processo 5. Dois segundos depois o 6º deu "Nenhuma aba do eProc", e
+os 12 restantes voltaram para a fila.
+
+O raciocínio que fecha:
+- o extrator do eProc nunca abre aba; trabalha sempre na mesma. Logo a aba
+  fechada era a de trabalho;
+- a limpeza só fecha aba cujo id não estava na foto do início do bloco. Nos
+  processos 1 a 4 ela não tocou na aba — o id ainda era o original. Entre
+  15:54:25 e 15:56:49 o Chrome passou a apresentar a mesma aba com id novo, e
+  a limpeza a tratou como lixo;
+- navegar não troca id: a aba do TRF6 foi para `processo_selecionar` às 15:57
+  e manteve o dela;
+- o Leonardo confirmou que ninguém mexeu no Chrome. A troca é do próprio
+  Chrome, e a causa segue desconhecida.
+
+**Isso muito provavelmente responde 09/09.** Naquele dia o vigia provou o id
+inalterado até 12:31 e morreu; a aba sumiu até 12:43. Troca de id depois de
+12:31 mais uma limpeza é o mesmo mecanismo. Não dá para provar para trás.
+
+**Conserto em ad53945:** a limpeza não fecha a última aba do sistema em uso;
+ela fica e vira a aba de trabalho oficial do bloco. O evento novo
+`abas.poupada` grava o id novo e os do início — na próxima troca, fica
+registrado quando aconteceu. O conserto impede o dano, não explica a troca.
+
+**Sessão do eProc parada: o piso subiu de 22 para ~28 min.** Login entre 15:15
+e 15:23, primeiro uso às 15:51:08, e funcionou. A tese "o eProc morre esperando
+o RUPE" perde força de novo.
+
+**O `2817393-23.2026.8.13.0000` parou de travar a rodada.** Antes gastava ~14
+min e nunca terminava; hoje respondeu "não localizado no RUPE" em ~2 min.
+O RUPE inteiro (18) levou 28 min: 12 extraídos, 6 não localizados.
+
+**Certificado digital, de novo:** 15 recusas nos primeiros 27 do PJe — mesmo
+número de 09/09.
+
+**A rodada foi interrompida às ~16:30** com o PJe em 34/57, porque a equipe
+precisou sair do escritório. Os não processados continuam `pendente` (o agente
+não usa estado intermediário), e o comando fica `em_andamento` sem batimento —
+o painel e o agente o tratam como abandonado depois de 90 min. Para a próxima:
+rodar o `atualizar.bat` na máquina do Henrique (leva ad53945) e extrair de novo
+os pendentes, eProc TJMG incluído.
+
+---
+
 ## 09/09/2026 — duas janelas do agente, e a hipótese que fecha o 08/09
 
 O Henrique tinha **duas janelas pretas** do agente abertas. O certo é uma.
