@@ -9,6 +9,7 @@ from runner import (
     AVISO_MAX_LINHAS,
     STATUS_TRATADO_MANUAL,
     abas_vazadas,
+    aba_de_trabalho,
     descrever_abas,
     aviso_publicacao_ignorada,
     decidir_chrome_morreu,
@@ -310,6 +311,51 @@ def test_aba_que_foi_parar_no_login_do_tribunal_tambem_e_fechada():
     print("OK aba_no_sso")
 
 
+# ── a aba de trabalho que o Chrome trocou de id (11/09/2026) ──────
+
+EPROC_TJMG = "eproc1g.tjmg.jus.br"
+_PAGINA_DO_PROCESSO = ("https://eproc1g.tjmg.jus.br/eproc/controlador.php"
+                       "?acao=processo_selecionar&num_processo=10028536120268130439")
+
+
+def test_aba_de_trabalho_com_id_novo_nao_e_fechada():
+    # o caso de 11/09: a única aba do eProc TJMG tem id que não estava no início
+    agora = [_aba("rupe", url="https://pe.tjmg.jus.br/rupe/x"),
+             _aba("novo", url=_PAGINA_DO_PROCESSO)]
+    candidatas = abas_vazadas(agora, {"rupe", "velho"})
+    assert aba_de_trabalho(agora, candidatas, EPROC_TJMG) == "novo"
+    print("OK aba_de_trabalho_poupada")
+
+
+def test_com_a_aba_de_trabalho_viva_o_lixo_do_mesmo_host_sai():
+    # a aba original ainda está lá: a vazada do mesmo host é lixo de verdade
+    agora = [_aba("original", url=_PAGINA_DO_PROCESSO),
+             _aba("vazada", url="https://eproc1g.tjmg.jus.br/eproc/doc")]
+    candidatas = abas_vazadas(agora, {"original"})
+    assert aba_de_trabalho(agora, candidatas, EPROC_TJMG) is None
+    print("OK lixo_do_mesmo_host")
+
+
+def test_poupa_so_uma_quando_todas_do_host_sao_candidatas():
+    agora = [_aba("x", url=_PAGINA_DO_PROCESSO),
+             _aba("y", url="https://eproc1g.tjmg.jus.br/eproc/doc")]
+    assert aba_de_trabalho(agora, ["x", "y"], EPROC_TJMG) == "x"
+    print("OK poupa_uma")
+
+
+def test_aba_de_outro_sistema_nao_e_poupada():
+    # a candidata é de outro tribunal: a trava só vale para o sistema em uso
+    agora = [_aba("rupe", url="https://pe.tjmg.jus.br/rupe/x")]
+    assert aba_de_trabalho(agora, ["rupe"], EPROC_TJMG) is None
+    print("OK outro_sistema")
+
+
+def test_sistema_sem_host_conhecido_nao_poupa_nada():
+    agora = [_aba("x", url=_PAGINA_DO_PROCESSO)]
+    assert aba_de_trabalho(agora, ["x"], "") is None
+    print("OK sem_host")
+
+
 def test_resumo_diz_de_que_sao_as_abas():
     resumo = resumir_abas([_aba("a"), _aba("b"), _aba("i", tipo="iframe")])
     assert resumo.startswith("3 aba(s)")
@@ -486,6 +532,11 @@ if __name__ == "__main__":
     test_aba_que_foi_parar_no_login_do_tribunal_tambem_e_fechada()
     test_resumo_diz_de_que_sao_as_abas()
     test_resumo_sem_aba_nenhuma()
+    test_aba_de_trabalho_com_id_novo_nao_e_fechada()
+    test_com_a_aba_de_trabalho_viva_o_lixo_do_mesmo_host_sai()
+    test_poupa_so_uma_quando_todas_do_host_sao_candidatas()
+    test_aba_de_outro_sistema_nao_e_poupada()
+    test_sistema_sem_host_conhecido_nao_poupa_nada()
     test_cdp_mudo_condena_na_primeira()
     test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha()
     test_falha_repetida_com_chrome_vivo_ainda_condena()

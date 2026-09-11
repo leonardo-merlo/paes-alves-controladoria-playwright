@@ -285,6 +285,44 @@ def abas_vazadas(
     ]
 
 
+def aba_de_trabalho(
+    abas_agora: list[dict],
+    candidatas: list[str],
+    host_em_uso: str,
+) -> str | None:
+    """
+    Qual das `candidatas` à limpeza é, na verdade, a aba de trabalho do sistema
+    em uso — e por isso não pode ser fechada. Função pura — ver test_runner.py.
+
+    Existe por causa de 11/09/2026, na máquina do Henrique. Depois do 5º processo
+    do eProc TJMG a limpeza fechou `eproc1g.tjmg.jus.br/...processo_selecionar`
+    — a página do próprio processo 5 — e o 6º já não achou aba nenhuma. O
+    extrator do eProc nunca abre aba: trabalha sempre na mesma. Então a aba
+    fechada era a de trabalho, com um id que o Chrome trocou no meio do bloco
+    (nos processos 1 a 4 a limpeza não tocou nela). Ninguém mexeu no Chrome, e
+    a aba do TRF6 foi para a mesma página sem trocar de id — a causa da troca
+    segue desconhecida. É, muito provavelmente, o sumiço de 09/09 também.
+
+    A trava não depende de saber a causa: se fechar as candidatas deixaria o
+    sistema em uso sem nenhuma aba, a primeira candidata desse host fica.
+    """
+    if not host_em_uso:
+        return None
+    fechar = set(candidatas)
+    sobra_alguma = any(
+        aba.get("type") == "page"
+        and host_em_uso in (aba.get("url") or "")
+        and aba.get("id") not in fechar
+        for aba in abas_agora
+    )
+    if sobra_alguma:
+        return None
+    for aba in abas_agora:
+        if aba.get("id") in fechar and host_em_uso in (aba.get("url") or ""):
+            return aba.get("id")
+    return None
+
+
 def descrever_abas(abas: list[dict], ids: list[str], limite: int = 8) -> str:
     """
     Os endereços das abas com estes ids. Função pura — ver test_runner.py.
@@ -939,6 +977,19 @@ async def processar_por_sistema(
             # chegou a 46 numa rodada só — ver abas_vazadas.
             abas_agora = _get_abas_chrome()
             vazadas = abas_vazadas(abas_agora, ids_no_inicio)
+            poupada = aba_de_trabalho(abas_agora, vazadas, SISTEMA_HOST.get(sistema, ""))
+            if poupada:
+                vazadas = [tid for tid in vazadas if tid != poupada]
+                # Entra na régua: vira a aba de trabalho oficial do bloco, e a
+                # próxima limpeza já não a considera candidata.
+                ids_no_inicio.add(poupada)
+                print(f"{prefixo} — aba de trabalho mantida (o Chrome trocou o id dela)")
+                obs.registrar(
+                    "abas.poupada", ok=True, sistema=sistema, numero_cnj=info.numero_cnj,
+                    detalhe=f"mantida: {descrever_abas(abas_agora, [poupada])}",
+                    dados={"id_novo": poupada,
+                           "ids_do_inicio": sorted(i for i in ids_no_inicio if i != poupada)},
+                )
             if vazadas:
                 fechadas = [tid for tid in vazadas if fechar_aba_cdp(tid)]
                 print(f"{prefixo} — {len(fechadas)}/{len(vazadas)} aba(s) fechada(s)")
@@ -951,7 +1002,7 @@ async def processar_por_sistema(
                     sistema=sistema, numero_cnj=info.numero_cnj,
                     detalhe=f"fechadas: {descrever_abas(abas_agora, fechadas)}",
                     dados={"pedidas": len(vazadas), "fechadas": len(fechadas),
-                           "protegidas": len(ids_no_inicio)},
+                           "protegidas": len(ids_no_inicio), "ids_fechados": fechadas},
                 )
 
             # antes das checagens abaixo de propósito: tentativa que morreu no meio
