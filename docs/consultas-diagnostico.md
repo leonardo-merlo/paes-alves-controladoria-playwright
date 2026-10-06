@@ -108,6 +108,26 @@ order by segundos desc nulls last
 limit 20;
 ```
 
+## 8. Qual aba travou a conexão, e o Chrome descartou alguma?
+
+Para quando a rodada aborta com "Chrome parou de responder" mas o Chrome
+respondia ao ping (o caso de 02/10 e 05/10). A sondagem roda no início da
+rodada, quando o Chrome troca o id de uma aba e quando a conexão falha.
+
+```sql
+select momento::time(0) as hora, sistema, numero_cnj,
+       case when ok then '' else 'PROBLEMA' end as problema,
+       detalhe
+from eventos_extracao
+where etapa in ('chrome.config', 'abas.sondagem')
+  and momento > now() - interval '1 day'
+order by momento;
+```
+
+`NÃO RESPONDEM` aponta a aba muda. Testado em 06/10: uma única aba com
+caixa de alerta aberta trava a conexão do robô do mesmo jeito.
+`DESCARTADAS` = o Chrome congelou a aba para economizar memória.
+
 ---
 
 ## Como ler as etapas
@@ -129,3 +149,6 @@ limit 20;
 | `rodada.abortada` | o Chrome morreu e a rodada inteira parou |
 | `extrair.fim` | resumo final |
 | `comando.excecao` | o comando estourou com erro não previsto |
+| `chrome.config` | versão do Chrome e o que foi alterado na configuração de desempenho do perfil |
+| `abas.sondagem` | cada aba perguntada uma a uma: responde? foi descartada? `FALHA` = alguma muda ou descartada |
+| `cnj.fim` → `dados.abas` | retrato curto das abas depois de cada processo (id, tipo, endereço) |

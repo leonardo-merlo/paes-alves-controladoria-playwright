@@ -32,6 +32,7 @@ from sistema_auth import (
 )
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 import observabilidade as obs
+import chrome_saude
 
 INPUTS_DIR = Path("inputs")
 
@@ -435,6 +436,31 @@ def chrome_responde() -> bool:
     nunca chegaram a ser tentados.
     """
     return bool(_get_abas_chrome())
+
+
+async def _registrar_sondagem(
+    momento: str,
+    abas: list[dict] | None = None,
+    sistema: str | None = None,
+    numero_cnj: str | None = None,
+) -> None:
+    """
+    Pergunta a cada aba se ela responde e grava o resultado. Nunca levanta exceção.
+
+    Existe por causa de 02/10 e 05/10/2026: nas duas, o Chrome trocou o id da
+    aba de trabalho e a conexão seguinte travou 180s com o Chrome vivo. Sondar
+    na troca de id e na falha diz QUAL aba ficou muda, e se o Chrome a tinha
+    descartado — ver chrome_saude.py.
+    """
+    try:
+        resultados = await chrome_saude.sondar_abas(
+            abas if abas is not None else _get_abas_chrome())
+        ok, frase = chrome_saude.resumir_sondagem(resultados)
+    except Exception as e:
+        resultados, ok, frase = [], False, f"sondagem falhou: {type(e).__name__}: {e}"
+    obs.registrar("abas.sondagem", ok=ok, sistema=sistema, numero_cnj=numero_cnj,
+                  detalhe=f"[{momento}] {frase}",
+                  dados={"momento": momento, "abas": resultados})
 
 
 def _raiz_do_motivo(motivo: str) -> str:
@@ -953,13 +979,15 @@ async def processar_por_sistema(
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
 
             erro_do_cnj = str((resultado or {}).get("erro") or "")
+            abas_agora = _get_abas_chrome()
             obs.registrar(
                 "cnj.fim", ok=not erro_do_cnj, sistema=sistema,
                 numero_cnj=info.numero_cnj,
                 detalhe=(erro_do_cnj or
                          f"{(resultado or {}).get('total_documentos', 0)} documento(s)"),
                 dados={"posicao": i, "de": total,
-                       "duracao_s": (resultado or {}).get("duracao_extracao_s")},
+                       "duracao_s": (resultado or {}).get("duracao_extracao_s"),
+                       "abas": chrome_saude.retrato_abas(abas_agora)},
             )
             # A foto do ambiente no instante da falha. É a linha que faltou em
             # 08/09: sem ela, "Nenhuma aba do eProc" não diz se a aba nunca
@@ -968,14 +996,13 @@ async def processar_por_sistema(
                 obs.registrar("cnj.ambiente", ok=False, sistema=sistema,
                               numero_cnj=info.numero_cnj,
                               detalhe=f"abertas no Chrome agora: "
-                                      f"{obs.resumir_urls(_get_abas_chrome())}")
+                                      f"{obs.resumir_urls(abas_agora)}")
 
             # Limpa as abas que este processo deixou para trás, ANTES de qualquer
             # desvio abaixo: um processo que deu erro também abriu aba, e sair
             # pelo `break` sem limpar deixaria o lixo justamente na rodada que
             # travou. Uma aba a cada dez documentos, e o Chrome do Henrique
             # chegou a 46 numa rodada só — ver abas_vazadas.
-            abas_agora = _get_abas_chrome()
             vazadas = abas_vazadas(abas_agora, ids_no_inicio)
             poupada = aba_de_trabalho(abas_agora, vazadas, SISTEMA_HOST.get(sistema, ""))
             if poupada:
@@ -990,6 +1017,9 @@ async def processar_por_sistema(
                     dados={"id_novo": poupada,
                            "ids_do_inicio": sorted(i for i in ids_no_inicio if i != poupada)},
                 )
+                # nas duas vezes em que isto aconteceu (02/10 e 05/10) a conexão
+                # seguinte travou — ver _registrar_sondagem
+                await _registrar_sondagem("troca de id", abas_agora, sistema, info.numero_cnj)
             if vazadas:
                 fechadas = [tid for tid in vazadas if fechar_aba_cdp(tid)]
                 print(f"{prefixo} — {len(fechadas)}/{len(vazadas)} aba(s) fechada(s)")
@@ -1013,6 +1043,8 @@ async def processar_por_sistema(
             if eh_chrome_inacessivel(resultado):
                 falhas_cdp += 1
                 cdp_ok = chrome_responde()
+                if cdp_ok:
+                    await _registrar_sondagem("falha de conexão", None, sistema, info.numero_cnj)
                 obs.registrar("cnj.falha_cdp", ok=False, sistema=sistema,
                               numero_cnj=info.numero_cnj,
                               detalhe=f"falha de conexão {falhas_cdp}/{LIMITE_FALHAS_CDP}; "
@@ -1176,6 +1208,13 @@ async def modo_supabase(modo: str = MODO_INTERATIVO) -> dict:
         tem_aba, frase = estado_de_previvo(abas_previvo, sistema)
         obs.registrar("previvo.sistema", ok=tem_aba, sistema=sistema, detalhe=frase,
                       dados={"tem_aba": tem_aba})
+    # A régua de comparação para as sondagens do meio da rodada: se uma aba
+    # aparecer descartada depois, dá para saber se já começou assim.
+    desempenho = chrome_saude.ler_config_chrome()
+    versao = chrome_saude.versao_do_chrome()
+    obs.registrar("chrome.config", detalhe=chrome_saude.descrever_config(desempenho, versao),
+                  dados={"versao": versao, "desempenho": desempenho})
+    await _registrar_sondagem("previvo", abas_previvo)
 
     ids_ok, ids_erro, ids_revisao, ids_nada_novo, motivos_erro, devolvidos = (
         await processar_por_sistema(

@@ -7,6 +7,64 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 ---
 
+## 06/10/2026 — PJe de volta para "pendente": não foi a limpeza, foi a conexão que travou
+
+Rodada de 05/10 (15:41–17:06, máquina do Henrique): 57 processos, 37 lidos, 1
+erro, 18 de volta na fila. Suspeita inicial era a limpeza de abas. Os dados de
+`eventos_extracao` descartam isso.
+
+**O que aconteceu, em ordem:**
+
+1. eProc TJMG: 16/16 lidos, 20 minutos.
+2. eProc TRF6 (3 processos): falhou no 1º com `sessao_expirada` no minuto 20.
+   A aba estava no SSO (`sso.cloud.pje.jus.br`), ou seja, o login não estava
+   feito ou caiu. Os 3 voltaram para a fila. Aqui a ordem pesou, sim.
+3. PJe: 22 de 38 lidos, sem nenhum erro, durante 1 hora. Depois do 22º, o
+   processo 23 travou em `connect_over_cdp` por 180s (`ws connected`, mas a
+   conexão nunca terminou). O Chrome respondia ao ping simples. O 24º travou
+   do mesmo jeito → 2ª falha → rodada abortada. O 23 ficou `erro_browser`; os
+   15 seguintes, nunca tentados, voltaram para `pendente`.
+
+**Por que não foi a limpeza:** ela registra toda aba que fecha
+(`abas.limpeza`), e na rodada de 05/10 não há nenhum registro desses. E quem
+escreve `pendente` é o `_devolver_a_fila`, chamado pelo aborto por CDP, não
+pela limpeza. A limpeza só *poupou* uma aba (`abas.poupada`).
+
+**O padrão que aparece:** desde a base zerada de 30/09 houve só duas
+`abas.poupada` (o Chrome trocou o id da aba de trabalho). **Nas duas, o
+processo seguinte travou na conexão e a rodada morreu:**
+
+- 02/10 12:00 — poupada no eProc → 1004718 e 1005175 travam → 101 devolvidos.
+- 05/10 17:00 — poupada no PJe → 5010585 e 5016149 travam → 15 devolvidos.
+
+Nenhuma rodada sem troca de id teve esse travamento (a de 04/10 foi outra
+coisa: Chrome fechou de verdade, `ECONNREFUSED`, nenhuma aba).
+
+Dois casos são pouco para provar causa, mas é a pista mais forte. Hipótese,
+**não confirmada**: a troca de id indica que a aba antiga foi substituída
+(por exemplo, aba descartada pela economia de memória do Chrome e recriada),
+e sobra um alvo que o Playwright tenta anexar e que nunca responde.
+
+**Achado à parte:** em 05/10, logo antes do travamento, apareceu uma aba
+`www.uniaoseguradora.com.br` no Chrome do robô e sumiu a aba original do
+PJe (QuadroAviso). Não se sabe se foi o Henrique navegando nessa janela ou
+outra coisa. A limpeza não toca nela (não é `.jus.br`).
+
+**Achado à parte, não é bug:** os 9 eProc TJMG pendentes de hoje (incluindo
+1005177, lido em 05/10) são publicações novas do lote de 06/10. Voltaram à
+fila pela reinserção, que é o comportamento esperado.
+
+**Medido no mesmo dia, num Chrome descartável na máquina do Leo:** uma única
+aba com caixa de alerta aberta faz o `connect_over_cdp` estourar o prazo. Sem
+a aba, conecta em 0,2s; com ela, timeout. É o mesmo sintoma das duas rodadas.
+O robô já reconectava do zero a cada processo, então "reconectar" não seria
+conserto. Entrou a sondagem (`chrome_saude.py`, evento `abas.sondagem`), que
+pergunta a cada aba se responde e se foi descartada, e só observa: muda nada,
+para a próxima rodada dizer qual das hipóteses é. Consulta 8 em
+`consultas-diagnostico.md`.
+
+---
+
 ## 11/09/2026 — a limpeza fechou a aba do eProc, e agora está provado
 
 Rodada na máquina do Henrique, a primeira depois de tirar o registro de
