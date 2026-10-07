@@ -7,6 +7,40 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 ---
 
+## 07/10/2026 — a limpeza fecha a aba do PJe, e a sondagem achou a aba muda
+
+Rodadas de 06/10 (ainda sem a sondagem) e 07/10 (já com ela). Corrige a
+entrada de 06/10: lá a limpeza não teve culpa, **mas nas outras teve**.
+
+**1. A limpeza fecha a aba inicial do PJe durante o bloco do eProc.** Aconteceu
+em 02/10, 06/10 e 07/10. A aba do PJe (QuadroAviso), parada esperando a vez,
+troca de id no meio do bloco do eProc, e a limpeza a toma por aba vazada.
+A trava `aba_de_trabalho` só protege o sistema em uso, não o que vem depois.
+Em 06/10 isso sozinho custou os 23 processos do PJe: "SEM ABA", devolvidos
+com "o sistema não estava aberto". Em 06/10 a limpeza também fechou a aba do
+RUPE (que já tinha terminado).
+
+**2. A aba muda é a aba de trabalho do próprio PJe.** Em 07/10 o PJe achou a
+aba do SSO do TRF6, leu 1 processo e o Chrome trocou o id da aba (poupada).
+A sondagem, 10s depois: a aba nova do PJe (`listAutosDigitais`) **não
+responde**, e a do eProc TJMG também não. O RUPE responde. Nas duas falhas
+de conexão seguintes, a mesma aba do PJe continuava muda, e a rodada abortou.
+Nenhuma aba que respondeu estava descartada, o que enfraquece a hipótese da
+economia de memória. A que mais combina é uma caixa de diálogo (alert) aberta
+na página do PJe: o extrator neutraliza `confirm` e `window.open`, mas não
+`alert`. O eProc mudo junto pode ser por dividir o processo do Chrome com o
+PJe (mesmo site `tjmg.jus.br`), mas isso é inferência.
+
+**3. O PJe vai por último e a rodada morre nele, então os mesmos processos
+nunca são lidos.** Dos 20 PJe pendentes dos lotes 05–07/10, 19 nunca foram
+tentados em rodada nenhuma.
+
+**4. O eProc TRF6 nunca está pronto.** "SEM ABA" no início das rodadas de
+05, 06 e 07/10. Em 07/10 a aba estava parada no retorno do login
+(`sso.cloud.pje.jus.br/.../broker/trf6/endpoint`), sem chegar no eProc.
+
+---
+
 ## 06/10/2026 — PJe de volta para "pendente": não foi a limpeza, foi a conexão que travou
 
 Rodada de 05/10 (15:41–17:06, máquina do Henrique): 57 processos, 37 lidos, 1
