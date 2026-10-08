@@ -38,6 +38,9 @@ from playwright.async_api import async_playwright, Browser, Page, Playwright
 from eproc_extractor import _garantir_pdfjs  # carrega PDF.js na página (reaproveitado)
 
 CDP_URL = "http://127.0.0.1:9222"
+# Conexão sã leva menos de 2s. O padrão do Playwright (180s) só servia para
+# esperar uma aba muda que nunca ia responder — ver runner._recuperar.
+CDP_TIMEOUT_MS = 30_000
 TIMEOUT = 20_000
 MAX_DOCS = 300
 # Algumas peças do RUPE não baixam (o servidor trava ao montar o PDF assinado).
@@ -82,7 +85,7 @@ INDICADORES_DESLOGADO = ["/login", "efetuarLogin", "j_id_jsp", "Informe seu logi
 async def conectar_cdp() -> tuple[Playwright, Browser]:
     try:
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.connect_over_cdp(CDP_URL)
+        browser = await playwright.chromium.connect_over_cdp(CDP_URL, timeout=CDP_TIMEOUT_MS)
         return playwright, browser
     except Exception as e:
         raise RuntimeError(

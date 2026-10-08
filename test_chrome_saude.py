@@ -8,6 +8,7 @@ from chrome_saude import (
     resumir_sondagem,
     retrato_abas,
     sondar_abas,
+    tem_aba_do_host,
 )
 
 
@@ -75,6 +76,21 @@ def test_sondagem_ignora_iframe_e_service_worker():
                                           {"id": "y", "type": "service_worker"}]))
     assert resultados == []
     print("OK sondagem_ignora_iframe_e_service_worker")
+
+
+def test_aba_no_login_nao_conta_como_aba_do_sistema():
+    """PJe parado no SSO não está no endereço do PJe: a aba do sistema falta."""
+    abas = [{"type": "page", "url": "https://sso.cloud.pje.jus.br/auth/x"},
+            {"type": "iframe", "url": "https://pje.tjmg.jus.br/pje/x"}]
+    assert not tem_aba_do_host(abas, "pje.tjmg.jus.br")
+    print("OK aba_no_login_nao_conta")
+
+
+def test_endereco_parecido_nao_conta():
+    # pe.tjmg (RUPE) e pje.tjmg (PJe) diferem por uma letra
+    abas = [{"type": "page", "url": "https://pje.tjmg.jus.br/pje/x"}]
+    assert not tem_aba_do_host(abas, "pe.tjmg.jus.br")
+    print("OK endereco_parecido_nao_conta")
 
 
 if __name__ == "__main__":

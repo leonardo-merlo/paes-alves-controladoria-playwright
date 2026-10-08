@@ -1,7 +1,8 @@
 """test_runner.py — testes das decisões de desfecho da rodada. Rodar: python test_runner.py"""
 
 from runner import (
-    LIMITE_FALHAS_CDP,
+    DESFECHO_ABANDONAR_SISTEMA,
+    DESFECHO_ABORTAR_RODADA,
     MOTIVO_CHROME,
     MOTIVO_LOGIN_PENDENTE,
     MOTIVO_SEM_ABA,
@@ -12,7 +13,8 @@ from runner import (
     aba_de_trabalho,
     descrever_abas,
     aviso_publicacao_ignorada,
-    decidir_chrome_morreu,
+    decidir_desfecho_cdp,
+    hosts_protegidos,
     resumir_abas,
     motivo_de_nao_reinserir,
     duracao_segundos,
@@ -311,6 +313,40 @@ def test_aba_que_foi_parar_no_login_do_tribunal_tambem_e_fechada():
     print("OK aba_no_sso")
 
 
+# ── a limpeza não fecha aba de outro sistema (02, 06 e 07/10/2026) ─
+
+def test_aba_do_pje_esperando_a_vez_nao_e_fechada_no_eproc():
+    # o caso de 06/10: a aba do PJe trocou de id parada na fila, durante o eProc,
+    # e a limpeza a fechou. Os 23 processos do PJe voltaram à fila.
+    agora = [_aba("pje-id-novo", url="https://pje.tjmg.jus.br/pje/QuadroAviso/listView.seam")]
+    assert abas_vazadas(agora, set(), protegidos=hosts_protegidos("eproc_tjmg")) == []
+    print("OK aba_do_pje_protegida_no_eproc")
+
+
+def test_aba_do_rupe_nao_e_fechada_no_eproc():
+    agora = [_aba("rupe", url="https://pe.tjmg.jus.br/rupe/portaljus/intranet/processo/processos.rupe")]
+    assert abas_vazadas(agora, set(), protegidos=hosts_protegidos("eproc_tjmg")) == []
+    print("OK aba_do_rupe_protegida")
+
+
+def test_login_do_trf6_em_andamento_nao_e_fechado():
+    agora = [_aba("trf6", url="https://sso.cloud.pje.jus.br/auth/realms/pje/broker/trf6/endpoint")]
+    assert abas_vazadas(agora, set(), protegidos=hosts_protegidos("eproc_tjmg")) == []
+    print("OK login_trf6_protegido")
+
+
+def test_sso_vazado_pelo_proprio_pje_continua_sendo_fechado():
+    agora = [_aba("sso", url="https://sso.cloud.pje.jus.br/auth/realms/pje/protocol")]
+    assert abas_vazadas(agora, set(), protegidos=hosts_protegidos("pje_tjmg")) == ["sso"]
+    print("OK sso_do_pje_fechado_no_pje")
+
+
+def test_aba_nova_do_proprio_sistema_continua_sendo_fechada():
+    agora = [_aba("lixo", url="https://eproc1g.tjmg.jus.br/eproc/controlador.php?acao=x")]
+    assert abas_vazadas(agora, set(), protegidos=hosts_protegidos("eproc_tjmg")) == ["lixo"]
+    print("OK lixo_do_proprio_sistema_fechado")
+
+
 # ── a aba de trabalho que o Chrome trocou de id (11/09/2026) ──────
 
 EPROC_TJMG = "eproc1g.tjmg.jus.br"
@@ -368,20 +404,19 @@ def test_resumo_sem_aba_nenhuma():
     print("OK resumo_vazio")
 
 
-# ── uma falha de CDP não condena a rodada ─────────────────────────
+# ── falha de CDP depois da recuperação ────────────────────────────
 
-def test_cdp_mudo_condena_na_primeira():
-    # Chrome que não responde nem ao endereço de debug não volta sozinho:
-    # insistir custaria 180s por processo sem extrair nada
-    assert decidir_chrome_morreu(cdp_responde=False, falhas_cdp=1) is True
+def test_cdp_mudo_condena_a_rodada():
+    # Chrome que não responde nem ao endereço de debug não volta sozinho
+    assert decidir_desfecho_cdp(cdp_responde=False) == DESFECHO_ABORTAR_RODADA
     print("OK cdp_mudo_condena")
 
 
-def test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha():
-    # o caso de 17/08: uma falha no primeiro CNJ do PJe jogou 17 processos de
-    # dois sistemas de volta para a fila sem nenhum deles ter sido tentado
-    assert decidir_chrome_morreu(cdp_responde=True, falhas_cdp=1) is False
-    print("OK chrome_vivo_segue")
+def test_chrome_vivo_abandona_so_o_sistema():
+    # 02 a 07/10: a rodada inteira parava e o PJe, último da fila, ficava sem a
+    # vez. Com o Chrome vivo o problema é do sistema, não da rodada.
+    assert decidir_desfecho_cdp(cdp_responde=True) == DESFECHO_ABANDONAR_SISTEMA
+    print("OK chrome_vivo_abandona_so_o_sistema")
 
 
 # ── reinserção por e-mail não desfaz decisão de gente ─────────────
@@ -449,13 +484,6 @@ def test_erro_e_processado_continuam_podendo_voltar():
     assert motivo_de_nao_reinserir("processado") is None
     assert motivo_de_nao_reinserir(None) is None
     print("OK outros_podem_voltar")
-
-
-def test_falha_repetida_com_chrome_vivo_ainda_condena():
-    # o limite existe para não gastar 180s por CNJ contra um Chrome que responde
-    # ao HTTP mas não deixa o Playwright anexar — a fila de 20 viraria uma hora
-    assert decidir_chrome_morreu(cdp_responde=True, falhas_cdp=LIMITE_FALHAS_CDP) is True
-    print("OK falha_repetida_condena")
 
 
 def test_descrever_abas_diz_qual_foi_fechada():
@@ -537,9 +565,13 @@ if __name__ == "__main__":
     test_poupa_so_uma_quando_todas_do_host_sao_candidatas()
     test_aba_de_outro_sistema_nao_e_poupada()
     test_sistema_sem_host_conhecido_nao_poupa_nada()
-    test_cdp_mudo_condena_na_primeira()
-    test_chrome_vivo_nao_condena_a_rodada_na_primeira_falha()
-    test_falha_repetida_com_chrome_vivo_ainda_condena()
+    test_cdp_mudo_condena_a_rodada()
+    test_chrome_vivo_abandona_so_o_sistema()
+    test_aba_do_pje_esperando_a_vez_nao_e_fechada_no_eproc()
+    test_aba_do_rupe_nao_e_fechada_no_eproc()
+    test_login_do_trf6_em_andamento_nao_e_fechado()
+    test_sso_vazado_pelo_proprio_pje_continua_sendo_fechado()
+    test_aba_nova_do_proprio_sistema_continua_sendo_fechada()
     test_processo_tratado_na_mao_nao_volta_para_a_fila()
     test_pendente_continua_sem_ser_reinserido()
     test_erro_e_processado_continuam_podendo_voltar()

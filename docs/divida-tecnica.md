@@ -138,7 +138,16 @@ lados, junto com o `modo_auto` e a máquina de retentativa de login em
 
 ---
 
-### Timeout de 180s do `connect_over_cdp` continua o padrão
+### RESOLVIDO em 08/10 — Timeout de 180s do `connect_over_cdp` continua o padrão
+
+**Resolução:** teto de 30s (`CDP_TIMEOUT_MS` nos três extratores). A medida que
+faltava estava no banco: na máquina do Henrique, com 6 a 11 abas, processos que
+falharam logo no começo ("Nenhuma aba do eProc/PJe") duraram de 1 a 4s no total,
+conexão incluída (rodadas de 06 e 07/10). 30s é mais de 7 vezes isso. E o modo
+de falha real não era conexão lenta: era aba muda, que nunca responde — esperar
+180s nela só atrasava a recuperação (ver `runner._recuperar`).
+
+Texto original, para registro:
 
 **Onde:** `conectar_cdp()` em `pje_extractor.py`, `eproc_extractor.py` e
 `rupe_extractor.py`.

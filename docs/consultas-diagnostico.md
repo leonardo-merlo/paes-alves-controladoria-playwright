@@ -144,7 +144,10 @@ caixa de alerta aberta trava a conexão do robô do mesmo jeito.
 | `sistema.inicio` / `sistema.fim` | começo e fim da fila de um sistema, com o minuto da rodada |
 | `cnj.fim` | desfecho de um processo, com duração |
 | `cnj.ambiente` | **só em falha**: as abas abertas no instante exato do erro |
-| `cnj.falha_cdp` | não conseguiu falar com o Chrome; diz se o Chrome respondeu ao ping simples |
+| `chrome.recuperacao` | a conexão travou: quais abas mudas o robô fechou e se abriu aba nova; em seguida tenta o mesmo processo de novo |
+| `cnj.falha_cdp` | a conexão falhou de novo **depois** da recuperação; diz se o Chrome respondeu ao ping simples |
+| `sistema.abandonado` | o sistema não destravou: o resto dele volta à fila e a rodada segue para o próximo sistema |
+| `abas.reaberta` | não havia aba do sistema no início do bloco dele, e o robô abriu uma |
 | `sistema.sem_sessao` | falhou no primeiro processo do sistema e devolveu a fila inteira |
 | `rodada.abortada` | o Chrome morreu e a rodada inteira parou |
 | `extrair.fim` | resumo final |

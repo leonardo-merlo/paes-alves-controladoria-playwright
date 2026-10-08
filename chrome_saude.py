@@ -12,7 +12,11 @@ aba, uma por uma e com prazo curto, se ela responde — e se o Chrome a descarto
 para economizar memória (`document.wasDiscarded`), que é a hipótese principal
 para a troca de id.
 
-Só observa: não fecha, não recarrega e não muda nada no Chrome.
+A sondagem só observa. Quem age é `recuperar_conexao`, e só quando a conexão já
+falhou: fecha as abas mudas e garante uma aba nova do sistema em uso. Medido em
+08/10 num Chrome descartável: com uma aba presa num alerta a conexão trava;
+fechar a aba pelo endereço de debug destrava na hora (0,4s), enquanto dispensar
+o alerta pela própria aba não funciona, porque ela não responde a nada.
 """
 
 import asyncio
@@ -159,7 +163,8 @@ async def sondar_abas(abas: list[dict], prazo: float = PRAZO_SONDAGEM_S) -> list
     for aba in abas:
         if aba.get("type") != "page":
             continue
-        item: dict[str, Any] = {"id": (aba.get("id") or "")[:8], "host": _host(aba.get("url"))}
+        # id completo: a recuperação fecha a aba muda por ele
+        item: dict[str, Any] = {"id": aba.get("id") or "", "host": _host(aba.get("url"))}
         ws_url = aba.get("webSocketDebuggerUrl")
         if sem_biblioteca:
             item["responde"] = None
@@ -187,6 +192,75 @@ async def sondar_abas(abas: list[dict], prazo: float = PRAZO_SONDAGEM_S) -> list
         item["ms"] = int((time.monotonic() - inicio) * 1000)
         resultados.append(item)
     return resultados
+
+
+def listar_abas(cdp_url: str = CDP_URL) -> list[dict]:
+    try:
+        with urllib.request.urlopen(f"{cdp_url}/json", timeout=2) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return []
+
+
+def fechar_aba(target_id: str, cdp_url: str = CDP_URL) -> bool:
+    try:
+        urllib.request.urlopen(f"{cdp_url}/json/close/{target_id}", timeout=5).close()
+        return True
+    except Exception:
+        return False
+
+
+def tem_aba_do_host(abas: list[dict], host: str) -> bool:
+    """Alguma página está neste endereço? Função pura — ver test_chrome_saude.py."""
+    return bool(host) and any(
+        a.get("type") == "page" and _host(a.get("url")) == host for a in abas)
+
+
+async def garantir_aba(host: str, url: str, cdp_url: str = CDP_URL,
+                       espera_s: float = 10.0) -> bool:
+    """
+    Abre uma aba do sistema se não houver nenhuma. Devolve se abriu.
+
+    A sessão de login mora nos cookies do perfil, não na aba: a aba nova entra
+    logada. Se o login tiver caído, ela cai na tela de login e o extrator diz
+    isso no primeiro processo, como já dizia antes.
+    """
+    if not host or not url or tem_aba_do_host(listar_abas(cdp_url), host):
+        return False
+    try:
+        req = urllib.request.Request(f"{cdp_url}/json/new?{url}", method="PUT")
+        urllib.request.urlopen(req, timeout=5).close()
+    except Exception:
+        return False
+    # o Chrome cria a aba na hora, mas a página leva um tempo para carregar
+    limite = time.monotonic() + espera_s
+    while time.monotonic() < limite:
+        await asyncio.sleep(1)
+        if tem_aba_do_host(listar_abas(cdp_url), host):
+            break
+    return True
+
+
+async def recuperar_conexao(host: str, url: str, cdp_url: str = CDP_URL,
+                            prazo: float = PRAZO_SONDAGEM_S) -> dict:
+    """
+    Destrava a conexão depois de uma falha: fecha toda aba que não responde e
+    garante uma aba do sistema em uso. Nunca levanta exceção.
+
+    Fecha a aba muda de qualquer sistema, não só a do sistema em uso: basta uma
+    aba muda para a conexão inteira travar. A do sistema seguinte, se for ela,
+    é reaberta no início do bloco dele (ver `garantir_aba` no runner).
+    """
+    try:
+        sondagem = await sondar_abas(listar_abas(cdp_url), prazo)
+        mudas = [r for r in sondagem if r.get("responde") is False]
+        fechadas = [r["host"] for r in mudas if fechar_aba(r["id"], cdp_url)]
+        abriu = await garantir_aba(host, url, cdp_url)
+        return {"mudas": [r["host"] for r in mudas], "fechadas": fechadas,
+                "abriu": abriu, "agiu": bool(fechadas) or abriu}
+    except Exception as e:
+        return {"mudas": [], "fechadas": [], "abriu": False, "agiu": False,
+                "erro": f"{type(e).__name__}: {e}"}
 
 
 def resumir_sondagem(resultados: list[dict]) -> tuple[bool, str]:

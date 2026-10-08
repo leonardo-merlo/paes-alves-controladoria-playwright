@@ -12,6 +12,7 @@ import asyncio
 import re
 import sys
 import time
+import urllib.parse
 from collections import defaultdict
 from datetime import date, timezone, datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ from sistema_auth import (
     _avaliar_login,
     SEM_DETECCAO_DE_LOGIN,
     SISTEMA_HOST,
+    SISTEMA_URLS,
 )
 from supabase_writer import salvar_no_supabase, _get_client, _carregar_env
 import observabilidade as obs
@@ -56,11 +58,8 @@ LIMIAR_SESSAO_ENVELHECIDA_MIN = 10
 # anterior.
 MARCA_ANTES = " (antes: "
 
-# Quantas falhas de CDP são toleradas antes de condenar a rodada, QUANDO o Chrome
-# ainda responde ao endereço de debug. Não é 1 porque uma ponta solta condenava
-# 17 processos (17/08); não é alto porque cada falha custa os 180s do timeout do
-# Playwright parada — ver a dívida sobre esse teto em docs/divida-tecnica.md.
-LIMITE_FALHAS_CDP = 2
+MOTIVO_SISTEMA_TRAVOU = ("A aba deste sistema travou e o robô não conseguiu "
+                         "destravar — rode de novo")
 
 # Como a rodada trata o login. Eram dois valores num booleano (`modo_auto`) e
 # passaram a ser três quando "abrir os sistemas" virou um comando separado de
@@ -257,10 +256,48 @@ SUFIXO_JUDICIAL = ".jus.br"
 HOSTS_JUDICIAIS = frozenset(SISTEMA_HOST.values())  # usado pelo painel e pelos logs
 
 
+# Telas de login que um sistema usa mas não são o endereço dele. Aba parada
+# aqui é login em andamento ou esperando a vez: nunca é lixo de outro sistema.
+HOSTS_DE_LOGIN = frozenset({
+    "sso.cloud.pje.jus.br",
+    "sso-eproc.trf6.jus.br",
+    "certificado-sso-eproc.trf6.jus.br",
+})
+
+
+def hosts_protegidos(sistema_em_uso: str) -> frozenset[str]:
+    """
+    Endereços que a limpeza nunca fecha enquanto este sistema roda. Função pura
+    — ver test_runner.py.
+
+    Existe por causa de 02, 06 e 07/10/2026: durante o bloco do eProc, a aba do
+    PJe (e uma vez a do RUPE) trocou de id parada na fila, a limpeza a tomou por
+    aba vazada e fechou. Em 06/10 isso custou os 23 processos do PJe. Aba de
+    outro sistema nunca é lixo deste: só o sistema em uso abre abas.
+
+    O SSO do PJe é a exceção, só para o próprio PJe: abrir o PJe termina lá
+    (medido em 19/08), e é onde a aba vazada dele costuma parar.
+    """
+    meu_host = SISTEMA_HOST.get(sistema_em_uso, "")
+    outros = {h for s, h in SISTEMA_HOST.items() if s != sistema_em_uso and h != meu_host}
+    login = set(HOSTS_DE_LOGIN)
+    if sistema_em_uso == "pje_tjmg":
+        login.discard("sso.cloud.pje.jus.br")
+    return frozenset(outros | login)
+
+
+def _hostname(url: str | None) -> str:
+    try:
+        return urllib.parse.urlparse(url or "").hostname or ""
+    except Exception:
+        return ""
+
+
 def abas_vazadas(
     abas_agora: list[dict],
     ids_no_inicio: set[str],
     sufixo: str = SUFIXO_JUDICIAL,
+    protegidos: frozenset[str] = frozenset(),
 ) -> list[str]:
     """
     As abas que a extração abriu e ninguém fechou. Função pura — ver test_runner.py.
@@ -274,7 +311,8 @@ def abas_vazadas(
     Três travas para não fechar o que não é nosso:
     - só o que apareceu DEPOIS do início (o login do operador estava lá antes);
     - só `type == "page"` (iframe e service worker não se fecham por aqui);
-    - só endereço de tribunal (a pesquisa dele no Google fica em paz).
+    - só endereço de tribunal (a pesquisa dele no Google fica em paz);
+    - nunca endereço de outro sistema ou tela de login (ver hosts_protegidos).
     """
     return [
         aba.get("id", "")
@@ -282,6 +320,7 @@ def abas_vazadas(
         if aba.get("type") == "page"
         and aba.get("id") not in ids_no_inicio
         and sufixo in (aba.get("url") or "")
+        and _hostname(aba.get("url")) not in protegidos
         and aba.get("id")
     ]
 
@@ -463,6 +502,28 @@ async def _registrar_sondagem(
                   dados={"momento": momento, "abas": resultados})
 
 
+async def _recuperar(sistema: str, numero_cnj: str, prefixo: str) -> dict:
+    """
+    Destrava a conexão e grava o que foi feito. Nunca levanta exceção.
+
+    Medido em 07/10 na máquina do Henrique: depois de o Chrome trocar o id da
+    aba do PJe, essa aba ficou muda e cada conexão nova travava 180s nela.
+    Medido em 08/10 num Chrome descartável: fechar a aba muda destrava na hora.
+    """
+    resultado = await chrome_saude.recuperar_conexao(
+        SISTEMA_HOST.get(sistema, ""), SISTEMA_URLS.get(sistema, ""))
+    partes = []
+    if resultado["fechadas"]:
+        partes.append(f"fechei aba(s) muda(s): {', '.join(resultado['fechadas'])}")
+    if resultado["abriu"]:
+        partes.append("abri aba nova do sistema")
+    frase = "; ".join(partes) or "nenhuma aba muda encontrada; tento de novo assim mesmo"
+    print(f"{prefixo} — conexão travou: {frase}")
+    obs.registrar("chrome.recuperacao", ok=resultado["agiu"], sistema=sistema,
+                  numero_cnj=numero_cnj, detalhe=frase, dados=resultado)
+    return resultado
+
+
 def _raiz_do_motivo(motivo: str) -> str:
     """
     A causa original de um motivo, sem as camadas de '(antes: ...)' empilhadas.
@@ -495,22 +556,22 @@ def motivo_devolucao(motivo_novo: str, motivo_anterior: str | None) -> str:
     return f"{motivo_novo}{MARCA_ANTES}{raiz})"[:400]
 
 
-def decidir_chrome_morreu(cdp_responde: bool, falhas_cdp: int) -> bool:
-    """
-    Esta falha de CDP condena a rodada inteira? Função pura — ver test_runner.py.
+DESFECHO_ABORTAR_RODADA = "abortar_rodada"
+DESFECHO_ABANDONAR_SISTEMA = "abandonar_sistema"
 
-    Duas forças opostas, e por isso não é uma linha só. Insistir contra um Chrome
-    de fato travado custa 180s por processo e não extrai nada. Mas
-    desistir na primeira falha, como era até 17/08, joga fora a fila de todos os
-    sistemas seguintes por causa de uma ponta solta.
 
-    O desempate é a checagem barata: CDP mudo = travado de verdade, para na hora.
-    CDP respondendo = a falha foi da conexão do Playwright, então segue a fila e
-    só desiste se acontecer de novo.
+def decidir_desfecho_cdp(cdp_responde: bool) -> str:
     """
-    if not cdp_responde:
-        return True
-    return falhas_cdp >= LIMITE_FALHAS_CDP
+    O que fazer quando a conexão falhou mesmo depois de recuperar e tentar de
+    novo. Função pura — ver test_runner.py.
+
+    CDP mudo = o Chrome morreu: nenhum sistema seguinte tem chance, para tudo.
+    CDP respondendo = o Chrome está vivo e o problema é deste sistema: desiste
+    só dele e segue para o próximo. Até 08/10 a segunda falha parava a rodada
+    inteira, e como o PJe é o último, era sempre ele que ficava sem a vez: 81
+    dos 86 processos que o Henrique fez à mão entre 02 e 07/10.
+    """
+    return DESFECHO_ABORTAR_RODADA if not cdp_responde else DESFECHO_ABANDONAR_SISTEMA
 
 
 def motivo_do_erro(resultado: dict | None) -> str:
@@ -915,7 +976,6 @@ async def processar_por_sistema(
     # o Chrome travado não se recupera sozinho: uma vez detectado, nenhum sistema
     # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
     chrome_morreu = False
-    falhas_cdp = 0
     # Quando a rodada começou. Serve para saber se uma sessão que faltou nunca
     # existiu ou envelheceu esperando — ver motivo_da_falta_de_sessao — e para o
     # log registrar em que minuto cada sistema pegou a vez, que é o dado que
@@ -949,7 +1009,7 @@ async def processar_por_sistema(
         novo mais tarde. Todo o resto devolve True: o sistema está resolvido para
         esta rodada, mesmo que tenha dado erro.
         """
-        nonlocal chrome_morreu, falhas_cdp
+        nonlocal chrome_morreu
         infos = por_sistema[sistema]
         total = len(infos)
 
@@ -959,6 +1019,14 @@ async def processar_por_sistema(
             return True
 
         print(f"{'='*50}")
+        # Sem aba deste sistema, abre uma: o login mora nos cookies, não na aba.
+        # Em 06/10 a aba do PJe tinha sido fechada no meio da rodada e os 23
+        # processos voltaram à fila com "o sistema não estava aberto".
+        host, url = SISTEMA_HOST.get(sistema, ""), SISTEMA_URLS.get(sistema, "")
+        if await chrome_saude.garantir_aba(host, url):
+            print(f"[{sistema}] não havia aba deste sistema — abri uma nova")
+            obs.registrar("abas.reaberta", ok=True, sistema=sistema,
+                          detalhe=f"não havia aba de {host} no início do bloco; abri {url}")
         # As abas de agora são a régua da limpeza: tudo o que existir a partir
         # daqui e for de sistema judicial foi a extração que abriu. Ver
         # abas_vazadas para as travas.
@@ -976,6 +1044,12 @@ async def processar_por_sistema(
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
+            if eh_chrome_inacessivel(resultado) and chrome_responde():
+                # Chrome vivo e conexão travada: quase sempre uma aba muda. Fecha
+                # as mudas, garante a aba deste sistema e tenta o mesmo processo
+                # de novo — ver chrome_saude.recuperar_conexao.
+                await _recuperar(sistema, info.numero_cnj, prefixo)
+                resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             cnj_id = ids_map.get(info.numero_cnj) if ids_map else None
 
             erro_do_cnj = str((resultado or {}).get("erro") or "")
@@ -1003,7 +1077,8 @@ async def processar_por_sistema(
             # pelo `break` sem limpar deixaria o lixo justamente na rodada que
             # travou. Uma aba a cada dez documentos, e o Chrome do Henrique
             # chegou a 46 numa rodada só — ver abas_vazadas.
-            vazadas = abas_vazadas(abas_agora, ids_no_inicio)
+            vazadas = abas_vazadas(abas_agora, ids_no_inicio,
+                                   protegidos=hosts_protegidos(sistema))
             poupada = aba_de_trabalho(abas_agora, vazadas, SISTEMA_HOST.get(sistema, ""))
             if poupada:
                 vazadas = [tid for tid in vazadas if tid != poupada]
@@ -1041,17 +1116,16 @@ async def processar_por_sistema(
                 gravar_duracao(cnj_id, resultado["duracao_extracao_s"])
 
             if eh_chrome_inacessivel(resultado):
-                falhas_cdp += 1
+                # com o Chrome vivo, já houve recuperação e nova tentativa acima
                 cdp_ok = chrome_responde()
-                if cdp_ok:
-                    await _registrar_sondagem("falha de conexão", None, sistema, info.numero_cnj)
                 obs.registrar("cnj.falha_cdp", ok=False, sistema=sistema,
                               numero_cnj=info.numero_cnj,
-                              detalhe=f"falha de conexão {falhas_cdp}/{LIMITE_FALHAS_CDP}; "
+                              detalhe=("a conexão falhou de novo depois da recuperação; "
+                                       if cdp_ok else "a conexão falhou; ") +
                                       f"o Chrome {'respondeu' if cdp_ok else 'NÃO respondeu'} "
                                       "ao ping simples",
-                              dados={"falhas_cdp": falhas_cdp, "cdp_responde": cdp_ok})
-                if decidir_chrome_morreu(cdp_ok, falhas_cdp):
+                              dados={"cdp_responde": cdp_ok})
+                if decidir_desfecho_cdp(cdp_ok) == DESFECHO_ABORTAR_RODADA:
                     chrome_morreu = True
                     obs.registrar("rodada.abortada", ok=False, sistema=sistema,
                                   detalhe="Chrome parou de responder — todos os sistemas "
@@ -1060,10 +1134,15 @@ async def processar_por_sistema(
                     print(f"  >>> {MOTIVO_CHROME}")
                     _devolver_a_fila(infos[i - 1:], MOTIVO_CHROME)
                     break
-                # o CDP respondeu: foi esta conexão que falhou, não o Chrome.
-                # Condenar a rodada aqui custou 17 processos em 17/08.
-                print(f"  [{sistema}] falha de CDP {falhas_cdp}/{LIMITE_FALHAS_CDP}, "
-                      "mas o Chrome respondeu — seguindo a fila")
+                obs.registrar("sistema.abandonado", ok=False, sistema=sistema,
+                              numero_cnj=info.numero_cnj,
+                              detalhe=f"a aba travou e não destravou — "
+                                      f"{total - i + 1} de volta à fila; a rodada segue "
+                                      "para o próximo sistema",
+                              dados={"devolvidos": total - i + 1})
+                print(f"  [{sistema}] travou e não destravou — seguindo para o próximo sistema")
+                _devolver_a_fila(infos[i - 1:], MOTIVO_SISTEMA_TRAVOU)
+                break
 
             if eh_queda_de_sessao(resultado):
                 # seguir a fila só queima os CNJs restantes contra um sistema

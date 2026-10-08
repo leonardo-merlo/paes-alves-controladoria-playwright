@@ -7,6 +7,36 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 ---
 
+## 08/10/2026 — o robô passa a se recuperar sozinho, e por que não esperamos a causa
+
+Em vez de mais uma hipótese sobre por que a aba fica muda, a rodada passou a
+lidar com qualquer aba muda. Testado num Chrome descartável antes de decidir:
+
+- aba presa num alerta trava a conexão; **fechá-la pelo endereço de debug
+  destrava em 0,4s**. Dispensar o alerta pela própria aba não funciona.
+- logo, recuperar é: fechar toda aba muda, garantir uma aba do sistema em uso
+  (o login mora nos cookies) e tentar o mesmo processo de novo.
+
+O que mudou (`runner.py`, `chrome_saude.py`, extratores):
+
+1. Conexão travada com Chrome vivo → recuperação e nova tentativa.
+2. Falhou de novo → desiste **só daquele sistema**; a rodada segue. Até aqui
+   ela parava inteira, e o PJe, último da fila, pagava sempre.
+3. A limpeza nunca fecha aba de outro sistema nem tela de login.
+4. Sistema sem aba no início do bloco ganha uma aba nova.
+5. Teto de conexão de 180s para 30s (ver `divida-tecnica.md`).
+
+Testes: `test_rodada_recuperacao.py` (rodada inteira com extrator falso, os três
+desfechos) e `test_chrome_recuperacao.py` (Chrome real: alerta trava, recuperação
+destrava, aba sumida volta). Os testes da rodada falham se o comportamento
+antigo voltar.
+
+Como medir se melhorou: % do que entrou que foi extraído (era 47% de 02 a 07/10),
+rodadas que terminam sem `rodada.abortada`, e quantas vezes aparece
+`chrome.recuperacao` seguida de sucesso.
+
+---
+
 ## 07/10/2026 — a limpeza fecha a aba do PJe, e a sondagem achou a aba muda
 
 Rodadas de 06/10 (ainda sem a sondagem) e 07/10 (já com ela). Corrige a
@@ -38,6 +68,20 @@ tentados em rodada nenhuma.
 **4. O eProc TRF6 nunca está pronto.** "SEM ABA" no início das rodadas de
 05, 06 e 07/10. Em 07/10 a aba estava parada no retorno do login
 (`sso.cloud.pje.jus.br/.../broker/trf6/endpoint`), sem chegar no eProc.
+Em setembro passaram 11 do TRF6 (09/11 e 09/15), nos dias em que a aba
+estava logada quando chegou a vez dele.
+
+**5. O travamento não é do PJe.** No backup de 30/09 ele aparece no eProc
+TRF6 (15/09) e no eProc TJMG (18/09, logo depois de uma `abas.poupada` do
+RUPE). Quem estiver rodando na hora paga, e desde 31/08 o PJe é o último e o
+maior. A combinação que mudou o quadro do PJe: limpeza (19/08) + PJe esperando
+a vez enquanto o eProc roda (31/08).
+
+**Descartadas no mesmo dia, num Chrome descartável:** (a) janela nova aberta
+pela página bem na hora em que o robô desconecta ficaria pausada: não
+reproduziu, a conexão seguinte entrou em 0,2s; (b) ler a caixa de diálogo
+pela própria aba: com o alerta aberto a aba não responde nem ao `Page.enable`,
+então por dentro do Chrome não dá para saber.
 
 ---
 
