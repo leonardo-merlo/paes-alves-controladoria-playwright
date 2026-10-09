@@ -183,6 +183,11 @@ Regras de proxima_acao (vêm das correções que o gestor fez nos rascunhos):
 - Sentença publicada: status SENTENCA_ACORDO, proxima_acao "VERIFICAR NECESSIDADE DE RECURSO".
 - O texto precisa combinar com o status: status AGUARDAR começa com "AGUARDAR — "; qualquer
   outro status nunca começa com "AGUARDAR".
+- Certidão de triagem ou ato ordinatório que aponta pendência na inicial (documento,
+  comprovante, procuração): há algo a fazer — JUNTAR_DOCUMENTOS, EMENDA_INICIAL ou
+  MANIFESTAR, nunca AGUARDAR. Diga na proxima_acao o que a certidão pede.
+- Prazo NOSSO que já correu sem petição nossa (ex.: réplica não apresentada): status
+  CIENCIA, proxima_acao "PRAZO PERDIDO — <ato> — VERIFICAR".
 - Se os documentos não permitem identificar o ato (só certidões de migração, ato ordinatório
   sem conteúdo): status CIENCIA, prazo_fatal_dias_uteis 5, proxima_acao "VERIFICAR — <o que
   conferir>". Nunca deduza trânsito em julgado nem invente datas.
