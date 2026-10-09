@@ -117,6 +117,34 @@ def test_certidao_de_migracao_sai_da_integra_e_nao_gasta_vaga():
     print("OK migracao_nao_gasta_vaga")
 
 
+def test_revisar_poe_o_responsavel_do_tipo_de_caso():
+    analise = revisar_analise({"status_sugerido": "REPLICA", "responsavel_sugerido": "Henilda",
+                               "alerta": None, "proxima_acao": "PROTOCOLAR RÉPLICA"})
+    assert analise["responsavel_sugerido"] == "Júlia"
+    print("OK responsavel_por_status")
+
+
+def test_revisar_mantem_responsavel_de_status_fora_da_tabela():
+    analise = revisar_analise({"status_sugerido": "AGRAVO_INSTRUMENTO", "responsavel_sugerido": "Henilda",
+                               "alerta": None, "proxima_acao": "PROTOCOLAR AGRAVO"})
+    assert analise["responsavel_sugerido"] == "Henilda"
+    print("OK responsavel_fora_da_tabela")
+
+
+def test_revisar_prazo_interno_vence_dois_dias_uteis_antes_do_fatal():
+    analise = revisar_analise({"status_sugerido": "REPLICA", "prazo_fatal_dias_uteis": 15,
+                               "prazo_interno_dias_uteis": 12, "alerta": None, "proxima_acao": "PROTOCOLAR RÉPLICA"})
+    assert analise["prazo_interno_dias_uteis"] == 13
+    print("OK prazo_interno_menos_2")
+
+
+def test_revisar_prazo_interno_nunca_fica_antes_do_primeiro_dia():
+    analise = revisar_analise({"status_sugerido": "CIENCIA", "prazo_fatal_dias_uteis": 2,
+                               "alerta": None, "proxima_acao": "VERIFICAR — intimação"})
+    assert analise["prazo_interno_dias_uteis"] == 1
+    print("OK prazo_interno_minimo")
+
+
 if __name__ == "__main__":
     test_revisar_troca_treplica_por_replica_quando_somos_autor()
     test_revisar_mantem_treplica_quando_somos_reu()
@@ -131,4 +159,8 @@ if __name__ == "__main__":
     test_chamada_sem_tokens_custa_zero()
     test_anexar_uso_poe_os_tres_campos_na_analise()
     test_anexar_uso_preserva_o_que_ja_estava_na_analise()
+    test_revisar_poe_o_responsavel_do_tipo_de_caso()
+    test_revisar_mantem_responsavel_de_status_fora_da_tabela()
+    test_revisar_prazo_interno_vence_dois_dias_uteis_antes_do_fatal()
+    test_revisar_prazo_interno_nunca_fica_antes_do_primeiro_dia()
     print("Todos os testes passaram.")

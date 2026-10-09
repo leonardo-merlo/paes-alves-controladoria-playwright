@@ -56,6 +56,25 @@ STATUS_SUGERIDOS = [
     "CIENCIA",
 ]
 
+# Quem cuida de cada tipo de caso, respondido pelo Henrique na reunião de
+# 09/10/2026. Vence a sugestão do modelo: em 70 de 89 rascunhos ele trocou o
+# responsável à mão. Status fora da tabela ficam com a sugestão do modelo.
+RESPONSAVEL_POR_STATUS = {
+    "AGUARDAR": "Henrique",
+    "MANIFESTAR": "Henrique",
+    "JUNTAR_DOCUMENTOS": "Henrique",
+    "CIENCIA": "Henilda",
+    "CUMPRIMENTO_SENTENCA": "Henilda",
+    "REPLICA": "Júlia",
+    "APELACAO": "Júlia",
+    "CONTRARRAZOES": "Júlia",
+    "CONTRARRAZOES_RECURSO_ADESIVO": "Júlia",
+    "PETICAO_PROVAS": "Júlia",
+}
+
+# O prazo interno vence 2 dias úteis antes do fatal (Henrique, 09/10/2026).
+DIAS_UTEIS_ANTES_DO_FATAL = 2
+
 MODEL = "claude-haiku-4-5-20251001"
 # Preço do Haiku 4.5 por milhão de tokens, em dólar. Trocar de modelo sem mexer
 # aqui faz o custo gravado mentir — os dois andam juntos.
@@ -135,7 +154,7 @@ Retorne APENAS este JSON (sem texto antes ou depois):
   "proxima_acao": "VERBO + ato + objeto concreto, curto, sem datas (ex.: PROTOCOLAR RÉPLICA) OU AGUARDAR — próximo marco",
   "cenario_prazo": "EXPLICITO|VIA_ARTIGO|INFERIDO",
   "prazo_fatal_dias_uteis": 15,
-  "prazo_interno_dias_uteis": 12,
+  "prazo_interno_dias_uteis": 13,
   "justificativa": "5-7 frases descrevendo: (1) que polo representamos e como identificou, (2) o que aconteceu no processo até agora, (3) qual foi o evento mais recente e o que ele significa, (4) a quem o último comando/prazo é dirigido e se é obrigação NOSSA, (5) qual é a próxima obrigação processual e por quê, (6) qual artigo do CPC fundamenta o prazo e em qual arquivo (ex: Art. 335 — 02_PROCESSO_CONHECIMENTO)",
   "alerta": null,
   "classificacao_risco": "BAIXO|MEDIO|ALTO|CRITICO"
@@ -184,15 +203,23 @@ Regras de proxima_acao (vêm das correções que o gestor fez nos rascunhos):
 - O texto precisa combinar com o status: status AGUARDAR começa com "AGUARDAR — "; qualquer
   outro status nunca começa com "AGUARDAR".
 - Certidão de triagem ou ato ordinatório que aponta pendência na inicial (documento,
-  comprovante, procuração): há algo a fazer — JUNTAR_DOCUMENTOS, EMENDA_INICIAL ou
-  MANIFESTAR, nunca AGUARDAR. Diga na proxima_acao o que a certidão pede.
+  comprovante, procuração): há algo a fazer — JUNTAR_DOCUMENTOS (o mais comum), EMENDA_INICIAL
+  ou MANIFESTAR, nunca AGUARDAR. Diga na proxima_acao o que a certidão pede.
+- Só INTIMAÇÃO dirigida a nós pede resposta. Movimentação sem intimação (substabelecimento,
+  comprovante de publicação no DJEN, aviso de recebimento, juntada) não gera ato nosso.
+  Se houver intimação e não der para saber o que ela pede, status CIENCIA com
+  prazo_fatal_dias_uteis 5 — melhor conferir do que perder a tarefa.
+- Vista ou intimação para manifestar sem prazo escrito: prazo_fatal_dias_uteis 5.
 - Prazo NOSSO que já correu sem petição nossa (ex.: réplica não apresentada): status
   CIENCIA, proxima_acao "PRAZO PERDIDO — <ato> — VERIFICAR".
 - Se os documentos não permitem identificar o ato (só certidões de migração, ato ordinatório
   sem conteúdo): status CIENCIA, prazo_fatal_dias_uteis 5, proxima_acao "VERIFICAR — <o que
   conferir>". Nunca deduza trânsito em julgado nem invente datas.
 
-Regras de responsável: use exatamente o primeiro nome como listado acima. Regra geral: gestor → CONTESTACAO, advogados → SENTENCA_ACORDO ou EXECUCAO conforme o caso. prazo_interno = fatal - 3. alerta obrigatório quando cenario_prazo = INFERIDO."""
+Regras de responsável: use exatamente o primeiro nome como listado acima. Henrique: AGUARDAR,
+MANIFESTAR, JUNTAR_DOCUMENTOS. Henilda: CIENCIA, CUMPRIMENTO_SENTENCA. Júlia: REPLICA, APELACAO,
+CONTRARRAZOES, PETICAO_PROVAS. prazo_interno = fatal - 2 (dias úteis). alerta obrigatório quando
+cenario_prazo = INFERIDO."""
 
 
 def _formatar_eventos(metadados_timeline: list[dict]) -> str:
@@ -232,7 +259,8 @@ def revisar_analise(analise: dict) -> dict:
 
     Cada regra veio de uma correção repetida do gestor nos rascunhos de 04 a
     08/10/2026: "tréplica" no lugar de réplica (3 de 3) e status que contradiz o
-    texto da ação (AGUARDAR com "PROTOCOLAR...", ou o contrário).
+    texto da ação (AGUARDAR com "PROTOCOLAR...", ou o contrário). Responsável por
+    status e prazo interno vêm das respostas do Henrique em 09/10/2026.
     """
     acao = analise.get("proxima_acao") or ""
     if analise.get("nosso_polo") == "ATIVO" and "TRÉPLICA" in acao.upper():
@@ -241,6 +269,13 @@ def revisar_analise(analise: dict) -> dict:
         analise["proxima_acao"] = acao
 
     status = analise.get("status_sugerido")
+    if status in RESPONSAVEL_POR_STATUS:
+        analise["responsavel_sugerido"] = RESPONSAVEL_POR_STATUS[status]
+
+    fatal = analise.get("prazo_fatal_dias_uteis")
+    if isinstance(fatal, int) and fatal > 0:
+        analise["prazo_interno_dias_uteis"] = max(fatal - DIAS_UTEIS_ANTES_DO_FATAL, 1)
+
     comeca_aguardando = acao.strip().upper().startswith("AGUARDAR")
     contradicao = None
     if status == "AGUARDAR" and acao and not comeca_aguardando:
