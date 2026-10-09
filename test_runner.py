@@ -472,6 +472,14 @@ def test_aviso_nao_cresce_para_sempre():
     print("OK aviso_limitado")
 
 
+def test_aviso_limitado_nunca_corta_anotacao():
+    texto = "anotação escrita à mão"
+    for dia in range(1, 20):
+        texto = aviso_publicacao_ignorada(f"2026-07-{dia:02d}", texto)
+    assert texto.endswith("\nanotação escrita à mão")
+    print("OK aviso_limitado_preserva_anotacao")
+
+
 def test_aviso_preserva_observacao_que_ja_estava_la():
     texto = aviso_publicacao_ignorada("2026-08-19", "anotação escrita à mão")
     assert "anotação escrita à mão" in texto
@@ -580,6 +588,7 @@ if __name__ == "__main__":
     test_aviso_mais_recente_vem_primeiro()
     test_aviso_nao_repete_a_mesma_pauta()
     test_aviso_nao_cresce_para_sempre()
+    test_aviso_limitado_nunca_corta_anotacao()
     test_aviso_preserva_observacao_que_ja_estava_la()
     test_descrever_abas_diz_qual_foi_fechada()
     test_descrever_abas_lista_todas_na_ordem()

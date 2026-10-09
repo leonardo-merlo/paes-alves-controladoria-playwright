@@ -681,7 +681,10 @@ def aviso_publicacao_ignorada(lote_id: str | None, observacoes: str | None) -> s
     anteriores = [l for l in (observacoes or "").splitlines() if l.strip()]
     if linha in anteriores:
         return "\n".join(anteriores)
-    return "\n".join([linha] + anteriores[: AVISO_MAX_LINHAS - 1])
+    # o limite vale só para os avisos: a anotação de quem trata o processo nunca sai
+    avisos = [l for l in anteriores if l.startswith(MARCA_AVISO)][: AVISO_MAX_LINHAS - 1]
+    anotacoes = [l for l in anteriores if not l.startswith(MARCA_AVISO)]
+    return "\n".join([linha] + avisos + anotacoes)
 
 
 def motivo_de_nao_reinserir(status_atual: str | None) -> str | None:
