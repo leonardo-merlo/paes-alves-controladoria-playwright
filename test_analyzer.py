@@ -1,7 +1,10 @@
 """test_analyzer.py — testes do cálculo de custo e da lista de status.
 Rodar: python test_analyzer.py"""
 
-from analyzer import PROMPT_USER, STATUS_SUGERIDOS, anexar_uso, calcular_custo_usd
+from analyzer import (
+    PROMPT_USER, STATUS_SUGERIDOS, _formatar_documentos, anexar_uso, calcular_custo_usd,
+    revisar_analise,
+)
 
 # Cópia literal do CHECK de rascunhos.status_sugerido no banco, escrita à mão.
 # É de propósito que esteja duplicada: se alguém mexer em STATUS_SUGERIDOS sem
@@ -69,7 +72,58 @@ def test_prompt_oferece_todos_os_status_ao_modelo():
     print("OK prompt_com_os_21_status")
 
 
+def test_revisar_troca_treplica_por_replica_quando_somos_autor():
+    analise = revisar_analise({"nosso_polo": "ATIVO", "status_sugerido": "REPLICA",
+                               "proxima_acao": "PROTOCOLAR TRÉPLICA"})
+    assert analise["proxima_acao"] == "PROTOCOLAR RÉPLICA"
+    print("OK treplica_vira_replica")
+
+
+def test_revisar_mantem_treplica_quando_somos_reu():
+    analise = revisar_analise({"nosso_polo": "PASSIVO", "status_sugerido": "PETICAO",
+                               "proxima_acao": "PROTOCOLAR TRÉPLICA"})
+    assert analise["proxima_acao"] == "PROTOCOLAR TRÉPLICA"
+    print("OK treplica_reu_intacta")
+
+
+def test_revisar_avisa_aguardar_com_texto_de_protocolar():
+    analise = revisar_analise({"status_sugerido": "AGUARDAR", "alerta": None,
+                               "proxima_acao": "PROTOCOLAR CONTRARRAZÕES"})
+    assert "AGUARDAR" in analise["alerta"]
+    print("OK aviso_aguardar_com_protocolar")
+
+
+def test_revisar_avisa_status_de_ato_com_texto_de_aguardar():
+    analise = revisar_analise({"status_sugerido": "CIENCIA", "alerta": "Prazo inferido.",
+                               "proxima_acao": "AGUARDAR — audiência"})
+    assert analise["alerta"].startswith("Prazo inferido. Conferir:")
+    print("OK aviso_preserva_alerta")
+
+
+def test_revisar_nao_mexe_em_analise_coerente():
+    analise = revisar_analise({"nosso_polo": "ATIVO", "status_sugerido": "AGUARDAR",
+                               "alerta": None, "proxima_acao": "AGUARDAR — sentença"})
+    assert analise["alerta"] is None
+    print("OK analise_coerente_intacta")
+
+
+def test_certidao_de_migracao_sai_da_integra_e_nao_gasta_vaga():
+    docs = [{"indice": i, "numero_documento": str(i), "titulo": "Certidão de Erro de Migração",
+             "data_documento": "01/10/2026", "texto": "certidão"} for i in range(8)]
+    docs.append({"indice": 9, "numero_documento": "9", "titulo": "Despacho",
+                 "data_documento": "30/09/2026", "texto": "Intime-se para réplica."})
+    texto, na_integra = _formatar_documentos(docs)
+    assert na_integra == 1 and "Intime-se para réplica." in texto
+    print("OK migracao_nao_gasta_vaga")
+
+
 if __name__ == "__main__":
+    test_revisar_troca_treplica_por_replica_quando_somos_autor()
+    test_revisar_mantem_treplica_quando_somos_reu()
+    test_revisar_avisa_aguardar_com_texto_de_protocolar()
+    test_revisar_avisa_status_de_ato_com_texto_de_aguardar()
+    test_revisar_nao_mexe_em_analise_coerente()
+    test_certidao_de_migracao_sai_da_integra_e_nao_gasta_vaga()
     test_status_do_prompt_sao_exatamente_os_que_o_banco_aceita()
     test_prompt_oferece_todos_os_status_ao_modelo()
     test_custo_de_um_milhao_de_tokens_de_cada_lado()

@@ -6,6 +6,7 @@ Chamado pelo runner.py após a extração. Não rodar diretamente.
 
 import json
 import os
+import re
 import time
 from datetime import date
 from pathlib import Path
@@ -94,7 +95,9 @@ PROTOCOLO DE ANÁLISE:
    do escritório (os nomes constam na lista de RESPONSÁVEIS DISPONÍVEIS e suas variações —
    ex.: "Paes Alves Pequeno") e determine se eles atuam no POLO ATIVO (autor) ou PASSIVO
    (réu). Na quase totalidade dos casos somos o AUTOR, mas confirme sempre.
-1. Leia o despacho/intimação/documento mais recente e identifique o ato processual.
+1. Leia o despacho/intimação/documento mais recente DIRIGIDO AO NOSSO POLO e identifique o
+   ato processual. Ele prevalece sobre atas e despachos anteriores. Um ato cujo prazo já
+   correu (há "Decorrido prazo" ou petição posterior respondendo a ele) não gera prazo novo.
 2. DETERMINE A QUEM O COMANDO/PRAZO É DIRIGIDO. Um prazo dirigido à PARTE CONTRÁRIA
    (ex.: "RÉU - Banco X - Prazo: 15 dias" para contestar) NÃO é obrigação nossa — nesse
    caso a nossa próxima ação costuma ser AGUARDAR (ou manifestar, quando cabível). Só
@@ -106,7 +109,12 @@ PROTOCOLO DE ANÁLISE:
 4. Verifique o prazo nas REGRAS DO ESCRITÓRIO acima.
 5. Ao citar artigos na justificativa, sempre indique o arquivo de origem conforme o índice.
    Exemplo: "prazo de 15 dias úteis (Art. 335 — 02_PROCESSO_CONHECIMENTO)"
-6. Se o prazo não estiver explícito nas regras do escritório, use o índice para identificar a fase e citar o arquivo correto."""
+6. Se o prazo não estiver explícito nas regras do escritório, use o índice para identificar a fase e citar o arquivo correto.
+7. ANTES DE SUGERIR PROTOCOLAR UM ATO, confira se já existe petição NOSSA desse ato depois da
+   intimação. Se existe, o ato já foi cumprido e a vez é da outra parte: AGUARDAR.
+8. EM RECURSOS, IDENTIFIQUE QUEM ASSINOU CADA UM. Recurso adesivo assinado pelos nossos
+   advogados é NOSSO; nesse caso as contrarrazões cabíveis são à apelação principal da outra
+   parte. Nunca atribua à outra parte um recurso que nós interpusemos."""
 
 PROMPT_USER = """Processo: {numero_cnj} | Sistema: {sistema} | Hoje: {data_hoje}
 
@@ -124,7 +132,7 @@ Retorne APENAS este JSON (sem texto antes ou depois):
   "nosso_polo": "ATIVO|PASSIVO",
   "status_sugerido": "{status_opcoes}",
   "responsavel_sugerido": "{responsaveis_opcoes}",
-  "proxima_acao": "PROTOCOLAR X até DD/MM/AAAA (prazo interno: DD/MM/AAAA) OU AGUARDAR — motivo",
+  "proxima_acao": "VERBO + ato + objeto concreto, curto, sem datas (ex.: PROTOCOLAR RÉPLICA) OU AGUARDAR — próximo marco",
   "cenario_prazo": "EXPLICITO|VIA_ARTIGO|INFERIDO",
   "prazo_fatal_dias_uteis": 15,
   "prazo_interno_dias_uteis": 12,
@@ -160,6 +168,25 @@ MANIFESTAR ou PETICAO quando nenhum dos específicos descrever o ato:
   sobre proposta de conciliação, sobre documento juntado pela outra parte).
 - PETICAO: último recurso — há petição a protocolar e nenhum rótulo acima serve.
 
+Regras de proxima_acao (vêm das correções que o gestor fez nos rascunhos):
+- Uma ação concreta, em maiúsculas, começando pelo verbo: "PROTOCOLAR RÉPLICA",
+  "JUNTAR EXTRATO DO BENEFÍCIO DO INSS", "VERIFICAR SE HOUVE O PAGAMENTO DO ACORDO".
+  Diga QUAL documento juntar quando o despacho especificar.
+- NÃO escreva data de prazo ("até DD/MM"): o painel calcula o prazo fatal e o interno a partir dos dias úteis.
+- NÃO explique o motivo (isso vai na justificativa) e NÃO copie o texto do despacho.
+- Nunca "X ou Y": escolha uma ação. Na dúvida sobre recorrer, "VERIFICAR NECESSIDADE DE RECURSO".
+- Despacho com mais de um comando e prazos diferentes: um item por comando com o prazo de
+  cada um (ex.: "RETIFICAR ROL DE TESTEMUNHAS (15 DIAS); INDICAR PROVA EMPRESTADA (5 DIAS)");
+  prazo_fatal_dias_uteis = o menor deles.
+- A resposta do autor à contestação chama-se RÉPLICA. Nunca escreva "tréplica".
+- Acordo homologado ou comprovante de pagamento juntado: "VERIFICAR SE HOUVE O PAGAMENTO".
+- Sentença publicada: status SENTENCA_ACORDO, proxima_acao "VERIFICAR NECESSIDADE DE RECURSO".
+- O texto precisa combinar com o status: status AGUARDAR começa com "AGUARDAR — "; qualquer
+  outro status nunca começa com "AGUARDAR".
+- Se os documentos não permitem identificar o ato (só certidões de migração, ato ordinatório
+  sem conteúdo): status CIENCIA, prazo_fatal_dias_uteis 5, proxima_acao "VERIFICAR — <o que
+  conferir>". Nunca deduza trânsito em julgado nem invente datas.
+
 Regras de responsável: use exatamente o primeiro nome como listado acima. Regra geral: gestor → CONTESTACAO, advogados → SENTENCA_ACORDO ou EXECUCAO conforme o caso. prazo_interno = fatal - 3. alerta obrigatório quando cenario_prazo = INFERIDO."""
 
 
@@ -188,6 +215,40 @@ def _formatar_eventos(metadados_timeline: list[dict]) -> str:
     return "\n".join(linhas) if linhas else "[sem eventos capturados]"
 
 
+def eh_certidao_de_migracao(doc: dict) -> bool:
+    """Certidão de Migração, de Comunicação de Migração e de Erro de Migração."""
+    titulo = (doc.get("titulo") or "").lower()
+    return "certidão" in titulo and "migração" in titulo
+
+
+def revisar_analise(analise: dict) -> dict:
+    """
+    Corrige o que dá para corrigir sem o modelo e avisa o resto. Função pura.
+
+    Cada regra veio de uma correção repetida do gestor nos rascunhos de 04 a
+    08/10/2026: "tréplica" no lugar de réplica (3 de 3) e status que contradiz o
+    texto da ação (AGUARDAR com "PROTOCOLAR...", ou o contrário).
+    """
+    acao = analise.get("proxima_acao") or ""
+    if analise.get("nosso_polo") == "ATIVO" and "TRÉPLICA" in acao.upper():
+        acao = re.sub(r"tr[ée]plica", lambda m: "RÉPLICA" if m.group(0).isupper() else "réplica",
+                      acao, flags=re.IGNORECASE)
+        analise["proxima_acao"] = acao
+
+    status = analise.get("status_sugerido")
+    comeca_aguardando = acao.strip().upper().startswith("AGUARDAR")
+    contradicao = None
+    if status == "AGUARDAR" and acao and not comeca_aguardando:
+        contradicao = "o status é AGUARDAR, mas o texto pede uma ação nossa"
+    elif status and status != "AGUARDAR" and comeca_aguardando:
+        contradicao = f"o status é {status}, mas o texto diz para aguardar"
+    if contradicao:
+        aviso = f"Conferir: {contradicao}."
+        analise["alerta"] = f"{analise['alerta']} {aviso}" if analise.get("alerta") else aviso
+
+    return analise
+
+
 def _formatar_documentos(documentos: list[dict]) -> tuple[str, int]:
     """
     Monta o bloco de documentos e devolve (texto, quantos foram na íntegra).
@@ -213,6 +274,16 @@ def _formatar_documentos(documentos: list[dict]) -> tuple[str, int]:
             p for p in ((doc.get("titulo") or "").strip(),
                         (doc.get("data_documento") or "").strip()) if p
         )
+
+        # Em 4 dos 8 erros graves de leitura (out/2026) as certidões de migração
+        # ocupavam as vagas dos documentos recentes, e o modelo tirou delas fase e
+        # data. Ficam só como referência e não gastam vaga da íntegra.
+        if eh_certidao_de_migracao(doc):
+            linhas.append(
+                f"{cabecalho} | {rotulo} | [ATO ADMINISTRATIVO DE MIGRAÇÃO DE SISTEMA — "
+                "não gera prazo nem indica fase processual; ignore para a análise.]"
+            )
+            continue
 
         if not texto:
             linhas.append(f"{cabecalho} | {rotulo} | [INACESSÍVEL: sem texto extraído]")
@@ -263,7 +334,9 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
     # Caso raro: o próprio documento mais recente é maior que o orçamento inteiro.
     # Analisar só pela timeline daria um prazo com base em nada — melhor falhar e
     # cair na revisão manual do que devolver um prazo sem fundamento.
-    if docs_na_integra == 0 and any((d.get("texto") or "").strip() for d in documentos):
+    if docs_na_integra == 0 and any(
+        (d.get("texto") or "").strip() and not eh_certidao_de_migracao(d) for d in documentos
+    ):
         return {"erro": "documento_grande_demais — nenhum documento coube na íntegra",
                 "numero_cnj": numero_cnj}
     eventos_formatados = _formatar_eventos(resultado_extracao.get("metadados_timeline", []))
@@ -324,7 +397,7 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
                 if inicio != -1:
                     resposta_texto = resposta_texto[inicio:]
 
-            analise = json.loads(resposta_texto)
+            analise = revisar_analise(json.loads(resposta_texto))
             analise["numero_cnj"] = numero_cnj
             analise["total_documentos_analisados"] = len(documentos)
             analise["documentos_enviados_ao_modelo"] = docs_na_integra

@@ -7,6 +7,56 @@ mais recente primeiro. Nunca reescreve entrada antiga — só acrescenta.
 
 ---
 
+## 08/10/2026 — o que o Henrique corrige na análise da IA (04 a 08/10)
+
+Base: `revisoes_rascunho`, 67 edições de `proxima_acao` e 122 de checklist.
+Nenhuma mudança aplicada ainda; isto é diagnóstico.
+
+**Antes de ler qualquer padrão: boa parte dos dados é ruído do painel.**
+
+- 85 dos 117 checklists com `depois: []` são defeito, não escolha. No
+  rascunho tratado na mão o formulário abre sem passos; ao salvar com troca de
+  status, o gatilho do banco insere o modelo do status novo e, logo depois,
+  `salvarChecklist([])` apaga. A tela não mostra lista vazia, então ele não vê.
+  Código: `paes-alves-controladoria/app/processos/[id]/RascunhoDetalhe.tsx`
+  (`passosTocados`) e `actions.ts` (`salvarChecklist`).
+- 26 dos 80 rascunhos da IA têm `status_sugerido`/`proxima_acao` marcados em
+  `campos_editados_manualmente` sem a revisão correspondente. Causa confirmada:
+  o CHECK `revisoes_rascunho_motivos_check` não aceita o motivo `alerta`, então
+  todo salvamento que mexia na "Atenção crítica" perdia a linha inteira do
+  histórico, e `registrarRevisao` só fazia `console.error`.
+- Aprovar só copiava `proxima_acao` para `processos`. Status e responsável
+  ficavam com o palpite da IA gravado pelo robô: em 08/10, 119 de 174 processos
+  aprovados mostravam um status diferente do aprovado.
+- 47 das 66 edições de `proxima_acao` são de rascunho manual (campo vazio).
+  Mostram o estilo dele, não o erro da IA. Sobram 19 casos úteis.
+
+**Onde a IA erra a próxima ação (19 casos, um revisor, 4 dias):**
+
+1. Lê errado o ato (8): sugere protocolar o que já protocolamos; inverte de quem
+   é o recurso adesivo (era nosso); usa despacho antigo com prazo corrido;
+   inventa trânsito em julgado a partir de certidão de migração. Em 4 dos 8 as
+   certidões de migração ocupavam o lugar dos documentos recentes.
+2. "TRÉPLICA" em vez de "RÉPLICA" (3 de 3).
+3. Ação vaga ("APELACAO ou AGUARDAR") ou texto do despacho copiado.
+4. Datas: 4 caíram em fim de semana; uma análise trouxe duas datas finais.
+
+**Regras dele que a IA não sabia:** na dúvida é CIENCIA + 5 dias + "VERIFICAR",
+nunca AGUARDAR; acordo → "VERIFICAR SE HOUVE O PAGAMENTO"; sentença →
+"VERIFICAR NECESSIDADE DE RECURSO"; despacho com vários comandos tem um prazo
+para cada (o caso "15 DIAS É SÓ PRA TESTEMUNHA, PRO RESTO É 5"); texto curto,
+no imperativo, sem justificativa. Prazo interno dele não segue "fatal − 3".
+
+**Passo a passo:** vem só do modelo por status, a IA não escreve. Nos 30
+rascunhos da IA ele nunca manteve o modelo inteiro; quando escreve, é um passo
+só, específico do caso. "Comunicar o cliente" (em 18 dos 21 modelos) não
+sobreviveu em nenhuma edição.
+
+**Lição:** antes de tirar conclusão sobre o que o usuário "quis", conferir se
+o registro da edição é fiel. Aqui, 2/3 do sinal do checklist era o painel.
+
+---
+
 ## 08/10/2026 — o robô passa a se recuperar sozinho, e por que não esperamos a causa
 
 Em vez de mais uma hipótese sobre por que a aba fica muda, a rodada passou a
