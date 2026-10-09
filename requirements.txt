@@ -1,5 +1,6 @@
 playwright>=1.44.0
 pymupdf>=1.24.0
-anthropic>=0.40.0
+# Travado: a 1.x troca o httpx pelo httpx2 e recusa o httpx.Client do analyzer.py (quebrou a instalacao nova da Julia em 09/10/2026).
+anthropic==0.109.0
 python-dotenv>=1.0.0
 supabase>=2.0.0
