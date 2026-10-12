@@ -12,6 +12,7 @@ from agente import (
     esta_pausado,
     filtro_do_computador,
     identidade,
+    marcar_interrompidas,
     proximo_pendente,
     resumir_erro_do_loop,
 )
@@ -200,7 +201,59 @@ def test_filtro_aceita_pedido_deste_computador_ou_sem_dono():
     assert filtro_do_computador("DESKTOP-JULIA") == 'computador.is.null,computador.eq."DESKTOP-JULIA"'
 
 
+class _ConsultaFalsa:
+    """Guarda os filtros de cada update, para conferir o que seria encerrado."""
+
+    def __init__(self, registro: list):
+        self.registro = registro
+        self.filtros: dict = {}
+
+    def table(self, _nome):
+        return self
+
+    def update(self, valores):
+        self.filtros = {"valores": valores}
+        return self
+
+    def eq(self, campo, valor):
+        self.filtros[f"eq:{campo}"] = valor
+        return self
+
+    def lt(self, campo, valor):
+        self.filtros[f"lt:{campo}"] = valor
+        return self
+
+    def execute(self):
+        self.registro.append(self.filtros)
+
+        class _Resposta:
+            data = [{"id": "x"}]
+        return _Resposta()
+
+
+def test_interrompidas_so_mexe_em_rodada_em_andamento_deste_computador():
+    from datetime import datetime, timezone
+    registro: list = []
+    marcar_interrompidas(_ConsultaFalsa(registro), "DESKTOP-J",
+                         agora=datetime(2026, 10, 12, 20, 0, tzinfo=timezone.utc))
+    proprias = registro[0]
+    assert (proprias["eq:status"], proprias["eq:computador"]) == ("em_andamento", "DESKTOP-J")
+    assert proprias["lt:atualizado_em"] == "2026-10-12T19:57:00+00:00"
+
+
+def test_interrompidas_encerra_de_qualquer_computador_so_depois_de_90_min():
+    from datetime import datetime, timezone
+    registro: list = []
+    marcar_interrompidas(_ConsultaFalsa(registro), "DESKTOP-J",
+                         agora=datetime(2026, 10, 12, 20, 0, tzinfo=timezone.utc))
+    abandonadas = registro[1]
+    assert "eq:computador" not in abandonadas
+    assert abandonadas["lt:atualizado_em"] == "2026-10-12T18:30:00+00:00"
+
+
 if __name__ == "__main__":
+    test_interrompidas_so_mexe_em_rodada_em_andamento_deste_computador()
+    test_interrompidas_encerra_de_qualquer_computador_so_depois_de_90_min()
     test_identidade_usa_computador_e_usuario_do_windows()
     test_identidade_sem_usuario_mostra_o_computador()
     test_filtro_aceita_pedido_deste_computador_ou_sem_dono()

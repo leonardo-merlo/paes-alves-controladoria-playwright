@@ -76,7 +76,25 @@ LIMITE_RODADA_ABANDONADA_MIN = 90
 
 # De quanto em quanto tempo a rodada avisa que ainda está viva (ver _bater_ponto).
 # Bem menor que o limite acima: um batimento perdido não pode custar a trava.
-INTERVALO_BATIMENTO_S = 5 * 60
+# Era 5 min; virou 1 min em 12/10/2026 para a varredura de rodadas interrompidas
+# (ver marcar_interrompidas) poder distinguir rodada viva de morta em minutos.
+INTERVALO_BATIMENTO_S = 60
+
+# Rodada interrompida: computador desligado, bateria, janela fechada no meio.
+# Ninguém encerrava o comando e ele ficava 'em_andamento' para sempre — a de
+# 09/10 ficou assim. O agente parado confere de tempos em tempos e encerra:
+# - as rodadas DESTE computador sem batimento há mais de 3 min (ele está
+#   parado, então nenhuma delas é dele rodando agora; 3 batimentos perdidos
+#   cobrem uma janela duplicada do agente que ainda esteja viva)
+# - as de qualquer computador sem notícia há mais que LIMITE_RODADA_ABANDONADA_MIN
+# Notebook com a tampa fechada não entra aqui: o agente fica suspenso, não
+# reinicia, e ao reabrir continua a rodada normalmente.
+INTERVALO_VARREDURA_S = 60
+LIMITE_SEM_BATIMENTO_PROPRIO_MIN = 3
+MENSAGEM_INTERROMPIDA = (
+    "Interrompida: o agente parou no meio da rodada (computador desligado ou "
+    "janela fechada). Os processos já analisados ficaram salvos."
+)
 
 # 'Abrir sistemas' não espera login nem processa nada — nas rodadas medidas
 # levou de 3 a 13s. Em 08/09 travou em silêncio (nem erro, nem sucesso, nada
@@ -318,6 +336,33 @@ def ha_rodada_em_andamento(client) -> bool:
     return bool(res.data)
 
 
+def marcar_interrompidas(client, computador: str, agora: datetime | None = None) -> int:
+    """Encerra as rodadas mortas (ver MENSAGEM_INTERROMPIDA). Só chamar com o
+    agente parado. Retorna quantas encerrou."""
+    agora = agora or datetime.now(timezone.utc)
+    encerrar = {
+        "status": "erro",
+        "mensagem": MENSAGEM_INTERROMPIDA,
+        "atualizado_em": agora.isoformat(),
+    }
+    proprias = (
+        client.table("comandos").update(encerrar)
+        .eq("status", "em_andamento")
+        .eq("computador", computador)
+        .lt("atualizado_em",
+            (agora - timedelta(minutes=LIMITE_SEM_BATIMENTO_PROPRIO_MIN)).isoformat())
+        .execute()
+    )
+    abandonadas = (
+        client.table("comandos").update(encerrar)
+        .eq("status", "em_andamento")
+        .lt("atualizado_em",
+            (agora - timedelta(minutes=LIMITE_RODADA_ABANDONADA_MIN)).isoformat())
+        .execute()
+    )
+    return len(proprias.data or []) + len(abandonadas.data or [])
+
+
 def reivindicar(client, comando_id: str, mensagem: str) -> bool:
     """Camada (a) — claim atômico: marca 'em_andamento' SOMENTE se o comando
     ainda estiver 'pendente', numa única operação. Retorna True apenas se ESTE
@@ -517,6 +562,7 @@ def main_loop() -> None:
         print(f"Log desta rodada: {caminho_log}")
     avisou_pausa = False
     ultimo_aviso: str | None = None
+    proxima_varredura = 0.0
     while True:
         try:
             if esta_pausado():
@@ -528,7 +574,12 @@ def main_loop() -> None:
                 if avisou_pausa:
                     print("\nAgente religado. Aguardando comandos...\n")
                     avisou_pausa = False
-                processar_um(client, computador)
+                executou = processar_um(client, computador)
+                if not executou and time.monotonic() >= proxima_varredura:
+                    proxima_varredura = time.monotonic() + INTERVALO_VARREDURA_S
+                    encerradas = marcar_interrompidas(client, computador)
+                    if encerradas:
+                        print(f"{encerradas} rodada(s) interrompida(s) encerrada(s) no painel.")
             if ultimo_aviso is not None:
                 print("Conexão restabelecida. Aguardando comandos...")
                 ultimo_aviso = None

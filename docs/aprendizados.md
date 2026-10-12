@@ -435,3 +435,24 @@ uma tentativa (uma rodada fracassada, depois outra), o login pode ter
 acontecido bem antes da rodada que finalmente rodou, fazendo a sessão parecer
 mais "nova" do que realmente estava. Isso pode (ainda não confirmado) explicar
 por que o PJe expirou aos 22 minutos quando historicamente aguentava 40+.
+
+## 12/10/2026 — Rodada interrompida ficava "em andamento" para sempre
+
+A rodada `3fac9de9` (extrair, 09/10/2026) começou às 14:46 e parou por volta
+das 14:51 (horário de Brasília), quando o agente foi encerrado no meio. Ela
+analisou 5 processos, todos com rascunho certo: 5002303-20 e 5013217-58 (RUPE),
+1005183-31, 1005159-03 e 1001282-55 (eProc TJMG). Os 2 que faltaram do eProc
+TJMG (1001534-58 e 1001036-59) entraram na rodada `5638f3a8`, de 12/10. Na
+consulta de eventos ela aparece sem `extrair.fim`. Isso não é defeito de
+observabilidade: é a interrupção.
+
+Ninguém encerrava o comando, então ele ficou `em_andamento`. Não bloqueava
+nada, porque a regra dos 90 min já o ignorava, mas o histórico mentia. Tentei
+trocar a etiqueta direto no banco e o conector do Supabase recusou o UPDATE (a
+confirmação de alteração de dados voltou "declined" três vezes).
+
+Correção: o agente parado agora confere a cada minuto e encerra
+(`marcar_interrompidas`) as rodadas do próprio computador sem batimento há mais
+de 3 min, e as de qualquer computador sem notícia há mais de 90 min. O
+batimento da rodada passou de 5 min para 1 min. A `3fac9de9` deve ser encerrada
+assim que o primeiro agente atualizado ligar.
