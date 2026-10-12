@@ -1,6 +1,7 @@
 """test_runner.py — testes das decisões de desfecho da rodada. Rodar: python test_runner.py"""
 
 from runner import (
+    rodada_foi_encerrada,
     DESFECHO_ABANDONAR_SISTEMA,
     DESFECHO_ABORTAR_RODADA,
     MOTIVO_CHROME,
@@ -527,7 +528,14 @@ def test_descrever_abas_corta_lista_longa_dizendo_quanto_sobrou():
     print("OK descrever_abas_corta_lista_longa_dizendo_quanto_sobrou")
 
 
+def test_fora_de_rodada_nunca_manda_parar():
+    import observabilidade as obs
+    obs.encerrar_rodada()
+    assert rodada_foi_encerrada() is False
+
+
 if __name__ == "__main__":
+    test_fora_de_rodada_nunca_manda_parar()
     test_certificado_nao_vira_pergunta_sobre_login()
     test_motivo_mais_frequente_vence()
     test_sessao_caida_continua_sendo_dita()

@@ -52,6 +52,10 @@ def iniciar_rodada(comando_id: str | None) -> None:
     _remoto_desligado = False
 
 
+def comando_atual() -> str | None:
+    return _comando_id
+
+
 def encerrar_rodada() -> None:
     global _comando_id
     _comando_id = None

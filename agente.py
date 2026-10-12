@@ -24,6 +24,7 @@ from pathlib import Path
 from cnj_router import nome_sistema
 from iniciar import abrir_sistemas, extrair, main as executar_extracao
 from reanalisar import listar_sem_rascunho, reanalisar_um
+from runner import rodada_foi_encerrada
 from supabase_writer import _get_client, _carregar_env
 import observabilidade as obs
 
@@ -432,6 +433,11 @@ def processar_um(client, computador: str) -> bool:
                 status, mensagem = _resumo_abertura_para_status(resultado_abrir or {})
         else:
             resumo = asyncio.run(extrair() if acao == ACAO_EXTRAIR else executar_extracao()) or {}
+            if rodada_foi_encerrada():
+                # dada como interrompida enquanto este computador dormia: a
+                # etiqueta "Interrompida" fica, e a reanálise é da rodada nova
+                print("Rodada encerrada por fora enquanto rodava — mantendo 'Interrompida'.")
+                return True
             resumo["reanalisados"] = varrer_sem_rascunho(client)
             status, mensagem = _resumo_para_status(resumo)
         marcar(client, cid, status, mensagem)

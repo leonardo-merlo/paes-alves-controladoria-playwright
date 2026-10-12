@@ -40,6 +40,24 @@ INPUTS_DIR = Path("inputs")
 
 MOTIVO_CHROME = ("Chrome parou de responder — feche o Chrome por completo, "
                  "abra de novo, faça login e rode outra vez")
+# Notebook fechado por mais de 90 min no meio da rodada: o outro computador
+# encerra esta rodada (agente.marcar_interrompidas) e pode começar outra. Ao
+# reabrir, o agente acordaria e seguiria a fila junto com a rodada nova. Por
+# isso ele confere a etiqueta antes de cada processo e para se ela não for mais
+# dele. Não devolve nada à fila: os processos que faltam nunca saíram de
+# 'pendente', e a rodada nova pode estar mexendo neles agora.
+def rodada_foi_encerrada() -> bool:
+    comando_id = obs.comando_atual()
+    if not comando_id:
+        return False
+    try:
+        res = (_get_client().table("comandos").select("status")
+               .eq("id", comando_id).limit(1).execute())
+    except Exception:  # noqa: BLE001 — rede engasgada não é motivo para parar a rodada
+        return False
+    return bool(res.data) and res.data[0].get("status") != "em_andamento"
+
+
 MOTIVO_SESSAO = "Sessão caiu durante a rodada — refazer login e rodar de novo"
 MOTIVO_LOGIN_PENDENTE = "Login ainda não estava feito quando a extração tentou"
 MOTIVO_SEM_ABA = ("O sistema não estava aberto no Chrome quando chegou a vez dele — "
@@ -979,6 +997,7 @@ async def processar_por_sistema(
     # o Chrome travado não se recupera sozinho: uma vez detectado, nenhum sistema
     # seguinte tem chance. A flag para a rodada inteira, não só o sistema atual.
     chrome_morreu = False
+    rodada_encerrada = False
     # Quando a rodada começou. Serve para saber se uma sessão que faltou nunca
     # existiu ou envelheceu esperando — ver motivo_da_falta_de_sessao — e para o
     # log registrar em que minuto cada sistema pegou a vez, que é o dado que
@@ -1012,9 +1031,12 @@ async def processar_por_sistema(
         novo mais tarde. Todo o resto devolve True: o sistema está resolvido para
         esta rodada, mesmo que tenha dado erro.
         """
-        nonlocal chrome_morreu
+        nonlocal chrome_morreu, rodada_encerrada
         infos = por_sistema[sistema]
         total = len(infos)
+
+        if rodada_encerrada:
+            return True
 
         if chrome_morreu:
             print(f"[{sistema}] pulado — o Chrome não está respondendo")
@@ -1045,6 +1067,14 @@ async def processar_por_sistema(
                              "abas_no_chrome": len(abas_no_inicio), "tem_aba": tem_aba})
         for i, info in enumerate(infos, 1):
             prefixo = f"  [{i}/{total}] {info.numero_cnj}"
+            if rodada_foi_encerrada():
+                rodada_encerrada = True
+                obs.registrar("rodada.encerrada_fora", ok=False, sistema=sistema,
+                              numero_cnj=info.numero_cnj,
+                              detalhe="a etiqueta da rodada não está mais 'em andamento' "
+                                      "(foi dada como interrompida) — parei sem mexer na fila")
+                print(f"  [{sistema}] esta rodada foi encerrada por fora — parando aqui")
+                break
             data_corte = corte_map.get(info.numero_cnj) if corte_map else None
             resultado = await processar_cnj(info, data_str, prefixo, data_corte=data_corte)
             if eh_chrome_inacessivel(resultado) and chrome_responde():
