@@ -12,6 +12,8 @@ Uso:
 """
 
 import asyncio
+import os
+import platform
 import sys
 import time
 import threading
@@ -56,6 +58,16 @@ MENSAGEM_INICIAL = {
 # Está no .gitignore de propósito, para o atualizar.bat não apagá-lo.
 # Não interrompe rodada em andamento: só impede que a próxima comece.
 NOME_ARQUIVO_PAUSA = "AGENTE-PAUSADO.txt"
+
+# Com o sistema em mais de um computador (Henrique e Julia, desde 10/2026), o
+# pedido do painel diz em qual computador rodar (`comandos.computador`) e cada
+# agente só pega os seus — antes, o primeiro agente ligado pegava qualquer um, e
+# o Henrique clicava no dele para a extração abrir no Chrome da Julia.
+# Pedido sem computador (painel antigo, ou antes de algum agente se registrar)
+# continua valendo para qualquer um.
+# A presença em `agentes` é o que deixa o painel perguntar "qual é este
+# computador?" e avisar quando o agente escolhido está desligado.
+INTERVALO_PRESENCA_S = 30
 
 # Uma rodada de extração leva 20-45min. Um comando 'em_andamento' mais antigo
 # que isto é tratado como rodada abandonada (agente caiu no meio) e deixa de
@@ -183,11 +195,59 @@ def proximo_pendente(comandos: list[dict]) -> dict | None:
     return sorted(pendentes, key=lambda c: c.get("criado_em", ""))[0]
 
 
-def buscar_pendentes(client) -> list[dict]:
+def identidade(ambiente: dict[str, str] | None = None) -> tuple[str, str]:
+    """(id do computador, nome que o painel mostra). Função pura sobre o ambiente.
+
+    O id é o nome do computador no Windows, que não muda com atualização nem com
+    reinstalação na mesma máquina. O nome nasce do usuário do Windows ("julia" →
+    "Julia") e depois pode ser corrigido no banco — o agente nunca o sobrescreve.
+    """
+    ambiente = os.environ if ambiente is None else ambiente
+    computador = (ambiente.get("COMPUTERNAME") or platform.node() or "desconhecido").strip()
+    usuario = (ambiente.get("USERNAME") or "").strip()
+    return computador, (usuario.capitalize() if usuario else computador)
+
+
+def registrar_presenca(client, computador: str, nome: str, usuario: str) -> None:
+    existe = client.table("agentes").select("id").eq("id", computador).limit(1).execute()
+    agora = datetime.now(timezone.utc).isoformat()
+    if existe.data:
+        client.table("agentes").update(
+            {"visto_em": agora, "usuario_windows": usuario}
+        ).eq("id", computador).execute()
+    else:
+        client.table("agentes").insert(
+            {"id": computador, "nome": nome, "usuario_windows": usuario, "visto_em": agora}
+        ).execute()
+
+
+def _manter_presenca(computador: str, nome: str, usuario: str) -> None:
+    """Thread própria: durante uma extração o loop principal fica preso nela por
+    até uma hora, e o painel não pode achar que o agente desligou nesse tempo.
+    Cliente próprio pelo mesmo motivo de _bater_ponto. Falhar aqui nunca derruba nada."""
+    try:
+        client = _get_client()
+    except Exception:  # noqa: BLE001
+        return
+    while True:
+        try:
+            registrar_presenca(client, computador, nome, usuario)
+        except Exception:  # noqa: BLE001 — sem rede agora, tenta no próximo ciclo
+            pass
+        time.sleep(INTERVALO_PRESENCA_S)
+
+
+def filtro_do_computador(computador: str) -> str:
+    """Pedidos deste computador ou sem computador. Formato do `or` do PostgREST."""
+    return f'computador.is.null,computador.eq."{computador}"'
+
+
+def buscar_pendentes(client, computador: str) -> list[dict]:
     res = (
         client.table("comandos")
         .select("id, acao, status, criado_em")
         .eq("status", "pendente")
+        .or_(filtro_do_computador(computador))
         .order("criado_em")
         .execute()
     )
@@ -276,13 +336,13 @@ def reivindicar(client, comando_id: str, mensagem: str) -> bool:
     return len(res.data or []) == 1
 
 
-def processar_um(client) -> bool:
+def processar_um(client, computador: str) -> bool:
     """Pega e executa um comando pendente. Retorna True se executou algo."""
     # Camada (b): não inicia uma rodada se outra já estiver em andamento.
     if ha_rodada_em_andamento(client):
         return False
 
-    comando = proximo_pendente(buscar_pendentes(client))
+    comando = proximo_pendente(buscar_pendentes(client, computador))
     if not comando:
         return False
 
@@ -446,7 +506,13 @@ def main_loop() -> None:
     caminho_log = ligar_log()
     _carregar_env()
     client = _get_client()
+    computador, nome = identidade()
+    usuario = os.environ.get("USERNAME", "")
+    threading.Thread(
+        target=_manter_presenca, args=(computador, nome, usuario), daemon=True
+    ).start()
     print("Agente da controladoria iniciado. Aguardando comandos (Ctrl+C para sair)...")
+    print(f"Este computador: {computador}")
     if caminho_log:
         print(f"Log desta rodada: {caminho_log}")
     avisou_pausa = False
@@ -462,7 +528,7 @@ def main_loop() -> None:
                 if avisou_pausa:
                     print("\nAgente religado. Aguardando comandos...\n")
                     avisou_pausa = False
-                processar_um(client)
+                processar_um(client, computador)
             if ultimo_aviso is not None:
                 print("Conexão restabelecida. Aguardando comandos...")
                 ultimo_aviso = None

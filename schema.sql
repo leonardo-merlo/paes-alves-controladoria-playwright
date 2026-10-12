@@ -221,3 +221,23 @@ CREATE INDEX IF NOT EXISTS eventos_extracao_falha_idx   ON public.eventos_extrac
 ALTER TABLE public.eventos_extracao ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Usuarios autenticados podem ler eventos"
   ON public.eventos_extracao FOR SELECT TO authenticated USING (true);
+
+-- 10. COMPUTADORES (um agente por máquina) — aplicado em 12/10/2026
+-- Com o sistema no computador do Henrique e no da Julia, o pedido do painel
+-- passou a dizer em qual computador rodar. Ver agente.identidade e
+-- agente.buscar_pendentes.
+ALTER TABLE public.comandos ADD COLUMN IF NOT EXISTS computador text;
+COMMENT ON COLUMN public.comandos.computador IS 'Agente que deve executar o comando (agentes.id). Nulo = qualquer agente (painel antigo).';
+
+CREATE TABLE IF NOT EXISTS public.agentes (
+  id              text        PRIMARY KEY,
+  nome            text        NOT NULL,
+  usuario_windows text,
+  visto_em        timestamptz NOT NULL DEFAULT now(),
+  criado_em       timestamptz NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE public.agentes IS 'Um agente local por computador. id = nome do computador no Windows; nome = como o painel mostra (nasce com o usuario do Windows); visto_em = batimento a cada 30s.';
+
+ALTER TABLE public.agentes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuarios autenticados podem ler agentes"
+  ON public.agentes FOR SELECT TO authenticated USING (true);

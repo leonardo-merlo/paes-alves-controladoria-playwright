@@ -10,6 +10,8 @@ from agente import (
     _resumo_para_status,
     deve_imprimir,
     esta_pausado,
+    filtro_do_computador,
+    identidade,
     proximo_pendente,
     resumir_erro_do_loop,
 )
@@ -186,7 +188,22 @@ def test_erro_diferente_volta_a_imprimir():
     print("OK erro_novo_aparece")
 
 
+def test_identidade_usa_computador_e_usuario_do_windows():
+    assert identidade({"COMPUTERNAME": "DESKTOP-JULIA", "USERNAME": "julia"}) == ("DESKTOP-JULIA", "Julia")
+
+
+def test_identidade_sem_usuario_mostra_o_computador():
+    assert identidade({"COMPUTERNAME": "ESCRITORIO-01"}) == ("ESCRITORIO-01", "ESCRITORIO-01")
+
+
+def test_filtro_aceita_pedido_deste_computador_ou_sem_dono():
+    assert filtro_do_computador("DESKTOP-JULIA") == 'computador.is.null,computador.eq."DESKTOP-JULIA"'
+
+
 if __name__ == "__main__":
+    test_identidade_usa_computador_e_usuario_do_windows()
+    test_identidade_sem_usuario_mostra_o_computador()
+    test_filtro_aceita_pedido_deste_computador_ou_sem_dono()
     test_acao_antiga_continua_valida()
     test_abertura_diz_o_que_fazer_agora()
     test_abertura_sem_pendente_nao_pede_login()
