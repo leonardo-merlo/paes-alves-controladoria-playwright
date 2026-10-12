@@ -238,7 +238,7 @@ def test_interrompidas_so_mexe_em_rodada_em_andamento_deste_computador():
                          agora=datetime(2026, 10, 12, 20, 0, tzinfo=timezone.utc))
     proprias = registro[0]
     assert (proprias["eq:status"], proprias["eq:computador"]) == ("em_andamento", "DESKTOP-J")
-    assert proprias["lt:atualizado_em"] == "2026-10-12T19:57:00+00:00"
+    assert proprias["lt:atualizado_em"] == "2026-10-12T19:50:00+00:00"
 
 
 def test_interrompidas_encerra_de_qualquer_computador_so_depois_de_90_min():

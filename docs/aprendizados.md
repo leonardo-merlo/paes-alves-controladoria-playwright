@@ -453,6 +453,6 @@ confirmação de alteração de dados voltou "declined" três vezes).
 
 Correção: o agente parado agora confere a cada minuto e encerra
 (`marcar_interrompidas`) as rodadas do próprio computador sem batimento há mais
-de 3 min, e as de qualquer computador sem notícia há mais de 90 min. O
+de 10 min, e as de qualquer computador sem notícia há mais de 90 min. O
 batimento da rodada passou de 5 min para 1 min. A `3fac9de9` deve ser encerrada
 assim que o primeiro agente atualizado ligar.

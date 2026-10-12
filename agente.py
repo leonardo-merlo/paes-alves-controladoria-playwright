@@ -83,14 +83,14 @@ INTERVALO_BATIMENTO_S = 60
 # Rodada interrompida: computador desligado, bateria, janela fechada no meio.
 # Ninguém encerrava o comando e ele ficava 'em_andamento' para sempre — a de
 # 09/10 ficou assim. O agente parado confere de tempos em tempos e encerra:
-# - as rodadas DESTE computador sem batimento há mais de 3 min (ele está
-#   parado, então nenhuma delas é dele rodando agora; 3 batimentos perdidos
+# - as rodadas DESTE computador sem batimento há mais de 10 min (ele está
+#   parado, então nenhuma delas é dele rodando agora; 10 batimentos perdidos
 #   cobrem uma janela duplicada do agente que ainda esteja viva)
 # - as de qualquer computador sem notícia há mais que LIMITE_RODADA_ABANDONADA_MIN
 # Notebook com a tampa fechada não entra aqui: o agente fica suspenso, não
 # reinicia, e ao reabrir continua a rodada normalmente.
 INTERVALO_VARREDURA_S = 60
-LIMITE_SEM_BATIMENTO_PROPRIO_MIN = 3
+LIMITE_SEM_BATIMENTO_PROPRIO_MIN = 10
 MENSAGEM_INTERROMPIDA = (
     "Interrompida: o agente parou no meio da rodada (computador desligado ou "
     "janela fechada). Os processos já analisados ficaram salvos."
