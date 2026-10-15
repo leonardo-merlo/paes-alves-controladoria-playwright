@@ -456,3 +456,33 @@ Correção: o agente parado agora confere a cada minuto e encerra
 de 10 min, e as de qualquer computador sem notícia há mais de 90 min. O
 batimento da rodada passou de 5 min para 1 min. A `3fac9de9` deve ser encerrada
 assim que o primeiro agente atualizado ligar.
+
+## 15/10/2026 — Raio-x dos processos de 02/10 a 15/10
+
+Análise só de leitura no banco, 255 processos. Principais fatos:
+
+- **Revisão parada.** Nenhum rascunho aprovado desde 08/10 (última revisão
+  2026-10-08 22:09 UTC). 81 aguardam aprovação, 11 críticos. Estimativa: 1
+  prazo fatal já venceu, 1 vence 15/10 e mais 11 vencem até 22/10. 44 dos 81 não
+  têm prazo preenchido pela IA. Tarefas: 45 abertas, 40 com a Júlia; 7 com prazo
+  fatal vencido (não confirmado se é atraso real ou tarefa não marcada como
+  concluída).
+- **Robô melhorou depois de 08/10.** Até 07/10: 52% viraram manual. Depois: 8%
+  de falha. Os 86 `tratado_manual` são quase todos (84) de antes de 08/10 e
+  nenhum tem documento. "Chrome não respondeu" foi efeito dominó de 4 rodadas
+  derrubadas, e caiu quase todo no PJe porque ele vem por último.
+- **5 CNJs falham em toda rodada:** 5002278-63.2018 (PJe), 5015870-33,
+  5003683-90 e 5004925-84 (RUPE), 6005862-13 (eProc JFMG).
+- **O cartão "Qualidade da análise" mistura manual com IA.** Dos 180 revisados,
+  91 são `tratado_manual` (rascunho sem `modelo_ia`). Só IA: 89, 10 aprovados
+  direto.
+- **Prazo fatal da IA erra para mais:** 3 casos de 15 dias úteis quando o certo
+  era 5 ou 10, e 5 intimações sem prazo, onde o certo era 5. O padrão continua
+  em rascunhos gerados depois do ajuste de 09/10.
+- **Responsável:** a regra por status acerta cerca de 83%. Ela falha em
+  MANIFESTAR (sem critério claro) e em apelação cível (quase sempre Júlia).
+- **Custo** baixo e estável: US$ 5,63 em 10 dias úteis, cerca de US$ 12/mês,
+  modelo Haiku 4.5. eProc TJMG é o mais caro (documentos grandes). O PJe é o
+  mais lento, cerca de 6s por documento.
+- **RUPE aparece com dois nomes** (`pje_2g` e `pje_tjmg_2inst`), e os motivos
+  do painel não batem com o banco (65/17/7 contra 71/10/9).
