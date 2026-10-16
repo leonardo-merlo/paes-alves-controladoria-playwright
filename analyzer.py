@@ -75,14 +75,25 @@ RESPONSAVEL_POR_STATUS = {
 # O prazo interno vence 2 dias úteis antes do fatal (Henrique, 09/10/2026).
 DIAS_UTEIS_ANTES_DO_FATAL = 2
 
-MODEL = "claude-haiku-4-5-20251001"
-# Preço do Haiku 4.5 por milhão de tokens, em dólar. Trocar de modelo sem mexer
+MODEL = "claude-haiku-5-5"
+# Preço do Haiku 5.5 por milhão de tokens, em dólar. Trocar de modelo sem mexer
 # aqui faz o custo gravado mentir — os dois andam juntos.
-PRECO_ENTRADA_POR_MILHAO_USD = 1.0
-PRECO_SAIDA_POR_MILHAO_USD = 5.0
+# O Haiku 5.5 tem duas tabelas, escolhidas pelo tamanho do prompt: até 100 mil
+# tokens de entrada vale a barata; acima disso, a chamada INTEIRA (entrada e
+# saída) passa para a cara.
+LIMITE_PROMPT_CURTO_TOKENS = 100_000
+PRECO_ENTRADA_POR_MILHAO_USD = 0.10
+PRECO_SAIDA_POR_MILHAO_USD = 0.50
+PRECO_ENTRADA_PROMPT_LONGO_POR_MILHAO_USD = 0.50
+PRECO_SAIDA_PROMPT_LONGO_POR_MILHAO_USD = 2.50
+# O Haiku 5.5 pensa antes de responder, e o pensamento conta dentro de
+# max_tokens: o teto antigo (2048) cortaria a resposta no meio do JSON.
+MAX_TOKENS_RESPOSTA = 16_000
+ESFORCO = "medium"
 MAX_DOCS_PARA_ANALISE = 7  # documentos mais recentes enviados ao modelo (texto completo)
 # Teto de caracteres do bloco de documentos. O limite real é a janela do modelo
-# (200 mil tokens no Haiku 4.5); 320 mil caracteres ~ 80 mil tokens deixa folga
+# (1 milhão de tokens no Haiku 5.5); 320 mil caracteres ~ 105 mil tokens no
+# tokenizador do 5.5 (uns 30% a mais que no 4.5) deixa folga
 # para as regras do escritório e o índice do CPC no system prompt.
 MAX_CHARS_DOCUMENTOS = 320_000
 # Documentos que não couberam entram como referência (título + data). Os mais
@@ -349,8 +360,14 @@ def _formatar_documentos(documentos: list[dict]) -> tuple[str, int]:
 
 def calcular_custo_usd(tokens_entrada: int, tokens_saida: int) -> float:
     """Custo em dólar de uma chamada. Função pura — ver test_analyzer.py."""
-    return (tokens_entrada / 1_000_000 * PRECO_ENTRADA_POR_MILHAO_USD) + (
-        tokens_saida / 1_000_000 * PRECO_SAIDA_POR_MILHAO_USD
+    if tokens_entrada > LIMITE_PROMPT_CURTO_TOKENS:
+        preco_entrada = PRECO_ENTRADA_PROMPT_LONGO_POR_MILHAO_USD
+        preco_saida = PRECO_SAIDA_PROMPT_LONGO_POR_MILHAO_USD
+    else:
+        preco_entrada = PRECO_ENTRADA_POR_MILHAO_USD
+        preco_saida = PRECO_SAIDA_POR_MILHAO_USD
+    return (tokens_entrada / 1_000_000 * preco_entrada) + (
+        tokens_saida / 1_000_000 * preco_saida
     )
 
 
@@ -420,11 +437,16 @@ def analisar_processo(numero_cnj: str, resultado_extracao: dict) -> dict:
         try:
             message = client.messages.create(
                 model=MODEL,
-                max_tokens=2048,
+                max_tokens=MAX_TOKENS_RESPOSTA,
                 system=_build_system_msg(),
                 messages=[{"role": "user", "content": prompt}],
+                output_config={"effort": ESFORCO},
             )
-            resposta_texto = message.content[0].text.strip() if message.content else ""
+            # a resposta pode começar com blocos de pensamento: o texto não é
+            # mais garantidamente o primeiro bloco
+            resposta_texto = "".join(
+                bloco.text for bloco in message.content if bloco.type == "text"
+            ).strip()
 
             # extrair JSON de bloco ```json...``` se presente (mesmo após texto)
             import re as _re
