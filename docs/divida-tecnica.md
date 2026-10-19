@@ -315,3 +315,13 @@ ela seria repetir o que já falhou quatro vezes no mesmo dia.
 (`abas.limpeza` diz qual aba foi fechada, no log e no banco). Na próxima
 ocorrência a pergunta se responde por consulta. Até lá, isto fica registrado
 como aberto — não como resolvido pelos consertos do mesmo dia, que são outros.
+
+## Robô: rascunho sempre novo (17/10/2026)
+
+- **Atualizar o robô nos computadores do Henrique e da Julia** (rodar `atualizar.bat`
+  com a rodada parada). Até lá o banco já protege: a reescrita vira rascunho novo.
+- **Reanálise da mesma pauta** (`reanalisar.py`, varredura de rascunhos) também cria
+  rascunho novo, então pode haver dois pendentes da mesma pauta. Decidido assim.
+- **O robô ainda grava status, responsável e "o que fazer" no topo do processo** ao
+  analisar (`_upsert_processo`), antes de qualquer aprovação. A tarefa não depende mais
+  disso, mas o topo pode mostrar uma análise ainda não aprovada.

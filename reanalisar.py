@@ -17,7 +17,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from analyzer import analisar_processo, STATUS_SUGERIDOS
-from supabase_writer import _get_client, _carregar_env, _upsert_rascunho
+from supabase_writer import _get_client, _carregar_env, _inserir_rascunho
 
 # processos.status_atual aceita os mesmos atos que o modelo pode sugerir, mais os
 # três estados de ciclo de vida, que não vêm da IA. Escrever um valor de fora da
@@ -81,7 +81,7 @@ def reanalisar_um(client, processo: dict) -> str:
     if analise.get("erro"):
         return f"análise falhou: {analise['erro']}"
 
-    _upsert_rascunho(client, processo["id"], analise)
+    _inserir_rascunho(client, processo["id"], analise)
 
     update: dict = {"motivo_ignorado": None}
     status = analise.get("status_sugerido")

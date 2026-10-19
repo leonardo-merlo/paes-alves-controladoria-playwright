@@ -1,7 +1,7 @@
 """test_supabase_writer.py — testes da montagem da linha de rascunho.
 Rodar: python test_supabase_writer.py"""
 
-from supabase_writer import _montar_linha_rascunho, _chave_responsavel
+from supabase_writer import _montar_linha_rascunho, _chave_responsavel, _inserir_rascunho
 
 QUANDO = "2026-08-06T12:00:00+00:00"
 
@@ -65,6 +65,48 @@ def test_chave_responsavel_ignora_espaco_em_volta():
     print("OK chave_responsavel_ignora_espaco_em_volta")
 
 
+class _ClienteFalso:
+    """Registra o que o writer pede ao banco, sem banco."""
+
+    def __init__(self, pendente_existente: bool):
+        self.chamadas: list[tuple[str, str]] = []
+        self.pendente_existente = pendente_existente
+
+    def table(self, nome):
+        cliente = self
+
+        class _Consulta:
+            def select(self, *_):
+                return self
+
+            def eq(self, *_):
+                return self
+
+            def insert(self, _dados):
+                cliente.chamadas.append((nome, "insert"))
+                return self
+
+            def update(self, _dados):
+                cliente.chamadas.append((nome, "update"))
+                return self
+
+            def execute(self):
+                class _Resposta:
+                    data = [{"id": "r-antigo"}] if nome == "rascunhos" and cliente.pendente_existente else []
+                return _Resposta()
+
+        return _Consulta()
+
+
+def test_analise_nova_nunca_reescreve_rascunho_pendente():
+    # até 17/10/2026 o rascunho pendente era reescrito e a providência anterior sumia
+    cliente = _ClienteFalso(pendente_existente=True)
+    _inserir_rascunho(cliente, "proc-1", {"status_sugerido": "MANIFESTAR"})
+    assert ("rascunhos", "update") not in cliente.chamadas
+    assert ("rascunhos", "insert") in cliente.chamadas
+    print("OK analise_nova_nunca_reescreve_rascunho_pendente")
+
+
 if __name__ == "__main__":
     test_linha_carrega_tokens_e_custo()
     test_analise_antiga_sem_custo_nao_quebra()
@@ -73,4 +115,5 @@ if __name__ == "__main__":
     test_chave_responsavel_nulo_nao_estoura()
     test_chave_responsavel_vazio_e_espaco()
     test_chave_responsavel_ignora_espaco_em_volta()
+    test_analise_nova_nunca_reescreve_rascunho_pendente()
     print("Todos os testes passaram.")

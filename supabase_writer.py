@@ -204,9 +204,14 @@ def _montar_linha_rascunho(
     return {k: v for k, v in data.items() if v is not None}
 
 
-def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
+def _inserir_rascunho(client: Client, processo_id: str, analise: dict) -> None:
     """
-    Insere ou atualiza o rascunho de análise no Supabase.
+    Grava a análise como um rascunho NOVO. Nunca escreve por cima de outro.
+
+    Até 17/10/2026 a análise nova reescrevia o rascunho pendente do processo, e
+    iam embora a providência anterior (que podia continuar valendo) e as edições
+    do gestor. Agora cada análise é um rascunho; o banco liga cada um à pauta que
+    ele analisou (gatilho rascunhos_publicacao_ao_criar).
     """
     responsavel_map = _build_responsavel_map(client)
     responsavel_id = responsavel_map.get(
@@ -217,22 +222,7 @@ def _upsert_rascunho(client: Client, processo_id: str, analise: dict) -> None:
         processo_id, analise, responsavel_id,
         datetime.now(timezone.utc).isoformat(),
     )
-
-    # verificar se já existe rascunho pendente para esse processo
-    existente = (
-        client.table("rascunhos")
-        .select("id")
-        .eq("processo_id", processo_id)
-        .eq("status", "pendente")
-        .execute()
-    )
-
-    if existente.data:
-        # atualizar o rascunho pendente existente
-        client.table("rascunhos").update(data).eq("id", existente.data[0]["id"]).execute()
-    else:
-        # criar novo rascunho
-        client.table("rascunhos").insert(data).execute()
+    client.table("rascunhos").insert(data).execute()
 
 
 def salvar_no_supabase(
@@ -250,7 +240,7 @@ def salvar_no_supabase(
         processo_id = _upsert_processo(client, numero_cnj, resultado_extracao, analise)
         _upsert_documentos(client, processo_id, resultado_extracao.get("documentos", []), incremental=resultado_extracao.get("incremental", False))
         if analise:
-            _upsert_rascunho(client, processo_id, analise)
+            _inserir_rascunho(client, processo_id, analise)
 
         return {"ok": True, "processo_id": processo_id}
 

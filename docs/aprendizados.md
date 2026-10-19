@@ -486,3 +486,67 @@ Análise só de leitura no banco, 255 processos. Principais fatos:
   mais lento, cerca de 6s por documento.
 - **RUPE aparece com dois nomes** (`pje_2g` e `pje_tjmg_2inst`), e os motivos
   do painel não batem com o banco (65/17/7 contra 71/10/9).
+
+## 17/10/2026 — Painel: 0% no dia 16, 55% em dois dias e processo "pendente" com rascunho aprovado
+
+Investigação só de leitura (banco + código do painel). Quatro problemas, uma
+causa principal.
+
+- **Causa principal: uma linha por CNJ.** Quando um processo volta a sair numa
+  pauta nova, a ingestão (`lib/gmail/gravacao.ts`, decisão de 10/09) sobrescreve
+  `lote_id` com a data nova e volta `pje_status` para `pendente`. Documentos e
+  rascunho da análise anterior ficam. Efeitos: o processo sai do dia antigo e
+  entra no novo (a pauta de 13/10 tinha 30 CNJs e o painel mostra 28; 14/10, 21
+  e mostra 19; 15/10, 22 e mostra 21), e no dia novo ele aparece "Pendente" com
+  documentos, rascunho "Aprovado" ou "Aguardando aprovação" e o cartão "A
+  extração ainda não trouxe este processo". Dos 17 do dia 16, 6 são assim
+  (n.º 4, 7, 12, 13, 16 e 17).
+- **Taxa conta quem nem foi tentado.** O denominador é tudo que entrou, menos
+  duplicata (`entraNaTaxa`). Em 16/10 não houve rodada (nenhum comando `extrair`
+  no dia), então 0 de 17. De 15 a 16: 21 de 38 = 55%, sem nenhuma falha real.
+- **Tentativa repetida conta uma vez, pelo estado final.** Falha intermediária
+  some: a rodada de 15/10 teve "5 com erro", mas eram processos de 09/10 e 13/10
+  que falham toda rodada; o dia 15 aparece 100%. O histórico de tentativas existe
+  em `eventos_extracao` (`etapa = 'cnj.fim'`), o painel não lê.
+- **"Aguardando aprovação" discorda entre topo e tabela.** O cartão do topo só
+  conta rascunho pendente de processo `processado`; a tabela mostra o status do
+  rascunho de qualquer processo. Em 16/10: topo 0, tabela 3. E o rascunho antigo
+  pendente pode ser aprovado como se fosse da publicação nova.
+- **Dá para reconstruir o histórico:** `emails_recebidos.parser_resultado` guarda
+  os CNJs de toda pauta desde 30/09.
+
+**Correção aplicada em 17/10/2026** (painel e banco, sem deploy ainda):
+
+- Tabela `publicacoes`: uma linha por processo e por pauta. Um gatilho em `processos`
+  mantém a publicação atual em dia; quando o processo sai de novo, a anterior fica com o
+  desfecho que teve, ou `substituida` se nem foi tentada (aí ela herda o estado da
+  seguinte). Histórico refeito desde 28/09 a partir de `emails_recebidos`. Nada no
+  agente precisou mudar. O gatilho nunca bloqueia a gravação do processo.
+- Taxa de extração = extraídos ÷ tentados. Pendente fica fora e aparece como
+  "N aguardando rodada". Dia sem rodada mostra "—", não 0%. Em 15–16/10: 22 de 22.
+- Rascunho pertence à publicação mais recente que já existia quando ele foi gravado.
+  Aguardando aprovação, custo e qualidade passam a seguir a publicação.
+- Processo republicado diz, na tela, de que pauta são os documentos e o rascunho.
+
+## 17/10/2026 — Rascunho nunca é sobrescrito; vários rascunhos e tarefas por processo
+
+Decisões do Leonardo, aplicadas no banco, no painel e no robô (sem deploy ainda):
+
+- **Rascunho nunca é sobrescrito.** O robô reescrevia o rascunho pendente quando
+  analisava o processo de novo; iam embora a providência anterior e as edições do
+  gestor. Agora `supabase_writer._inserir_rascunho` sempre insere. Enquanto o robô
+  antigo roda em algum computador, o gatilho `rascunhos_nao_sobrescreve` transforma
+  a reescrita em rascunho novo (reconhece pela `data_extracao`, que só o robô grava).
+  Testado: o antigo fica intacto e a edição do gestor continua gravando.
+- **Cada rascunho sabe a pauta que analisou** (`rascunhos.publicacao_id`, preenchido
+  por gatilho; os 262 antigos pela regra de horário). O prazo conta dessa pauta.
+- **Cada tarefa guarda a sua providência** (`tarefas.proxima_acao` e `status_atual`).
+  Antes vinha do processo, que é um só: várias tarefas mostravam o mesmo texto, e a
+  reanálise do robô trocava o texto de uma tarefa já aprovada. As antigas receberam
+  o texto que mostravam.
+- **Aprovar análise antiga não volta o topo do processo para trás**: o topo só muda
+  se não houver aprovação mais nova.
+- **Avisos antes de aprovar** (análise antiga, publicação nova sem análise, tarefa
+  aberta) só pedem confirmação. Regras em `lib/avisos-aprovacao.ts`.
+- **Aguardando aprovação conta cada rascunho pendente**, no dia da pauta dele.
+- **Motivos de falha** lê `publicacoes`: a falha fica no dia em que aconteceu.
