@@ -550,3 +550,10 @@ Decisões do Leonardo, aplicadas no banco, no painel e no robô (sem deploy aind
   aberta) só pedem confirmação. Regras em `lib/avisos-aprovacao.ts`.
 - **Aguardando aprovação conta cada rascunho pendente**, no dia da pauta dele.
 - **Motivos de falha** lê `publicacoes`: a falha fica no dia em que aconteceu.
+
+## 23/10/2026 — Feedback semanal do Henrique
+- Semana 17/10 a 21/10: 94 rascunhos da IA revisados, 54 aprovados direto, 40 com edição, 0 rejeitados.
+- Prazo fatal: IA pôs 15, 15 e 7 onde ele corrigiu para 5 (petição de provas); 2 sem prazo; ciência 5 virou 6 em 2 casos; 1 manifestar 5 virou 10.
+- Aguardar contra ação: 6 casos em que a IA sugeriu ação e ele pôs Aguardar, 9 no sentido contrário; em 6 ele trocou o responsável para a Júlia (dos 38 em Aguardar, 20 ficaram com ele e 18 com a Júlia).
+- Respostas dele lidas: nenhuma. As perguntas da aba de 16/10 seguem sem resposta, por isso a aba nova não as repete.
+- Aba nova publicada no mesmo artefato, com 5 perguntas.
