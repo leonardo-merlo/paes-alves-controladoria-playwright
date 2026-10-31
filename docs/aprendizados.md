@@ -557,3 +557,9 @@ Decisões do Leonardo, aplicadas no banco, no painel e no robô (sem deploy aind
 - Aguardar contra ação: 6 casos em que a IA sugeriu ação e ele pôs Aguardar, 9 no sentido contrário; em 6 ele trocou o responsável para a Júlia (dos 38 em Aguardar, 20 ficaram com ele e 18 com a Júlia).
 - Respostas dele lidas: nenhuma. As perguntas da aba de 16/10 seguem sem resposta, por isso a aba nova não as repete.
 - Aba nova publicada no mesmo artefato, com 5 perguntas.
+
+## 30/10/2026 — Feedback semanal do Henrique
+- Semana 24/10 a 30/10: 0 rascunhos da IA revisados. A última revisão no painel foi em 21/10.
+- Fila: 141 rascunhos da IA pendentes (131 processos); o mais antigo desde 14/10.
+- Sem revisões, não há padrão novo. A aba de 30/10 só registra isso, sem perguntas.
+- Respostas dele lidas: nenhuma, nem em 16/10 nem em 23/10. Rodada atrasou e rodou na virada para 31/10.
