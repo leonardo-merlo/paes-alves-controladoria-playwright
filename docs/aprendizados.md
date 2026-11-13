@@ -569,3 +569,9 @@ Decisões do Leonardo, aplicadas no banco, no painel e no robô (sem deploy aind
 - Fila: 202 rascunhos da IA pendentes (187 processos), contra 141 na semana passada; o mais antigo desde 14/10 (23 dias).
 - Sem revisões, não há padrão novo. A aba de 06/11 só registra isso, sem perguntas.
 - Respostas dele lidas: nenhuma, nas coleções de 16/10, 23/10 e 30/10.
+
+## 13/11/2026 — Feedback semanal do Henrique
+- Semana 07/11 a 13/11: 0 rascunhos da IA revisados. A última revisão no painel segue sendo 21/10 (23 dias sem revisão).
+- Fila: 202 rascunhos da IA pendentes, o mesmo número de 06/11; o mais antigo desde 14/10 (30 dias).
+- Sem revisões, não há padrão novo. A aba de 13/11 só registra isso, sem perguntas e sem bloco de envio.
+- Respostas dele lidas: nenhuma, nas coleções de 16/10 e 23/10 (ambas vazias) e na de 06/11. Nenhuma das perguntas abertas foi respondida.
