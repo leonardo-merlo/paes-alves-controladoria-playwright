@@ -140,6 +140,8 @@ def ler_cnjs_supabase() -> list[dict]:
                 " motivo_ignorado")
         .in_("pje_status", ["pendente", "erro_browser", "captcha_bloqueado"])
         .eq("duplicata", False)
+        # quem o robô desistiu de procurar espera alguém no painel — ver contar_nao_localizado
+        .is_("robo_desistiu_em", "null")
         .order("data_entrada")
         .execute()
     )
@@ -183,7 +185,31 @@ def marcar_supabase(ids: list[str], status: str, motivo: str | None = None) -> N
         # sem limpar, um processo que volta a dar certo carrega para sempre o
         # motivo da falha anterior — o painel passa a mentir sobre o estado atual.
         update["motivo_ignorado"] = None
+    if status == "processado":
+        update["falhas_nao_localizado"] = 0
+        update["robo_desistiu_em"] = None
     client.table("processos").update(update).in_("id", ids).execute()
+
+
+def registrar_nao_localizado(cnj_id: str, motivo: str) -> bool:
+    """Soma uma rodada sem achar o processo no RUPE. True quando o robô desiste dele."""
+    if MARCA_NAO_LOCALIZADO not in motivo:
+        return False
+    _carregar_env()
+    client = _get_client()
+    res = (
+        client.table("processos").select("falhas_nao_localizado")
+        .eq("id", cnj_id).single().execute()
+    )
+    contagem = contar_nao_localizado(motivo, (res.data or {}).get("falhas_nao_localizado") or 0)
+    if contagem is None:
+        return False
+    falhas, desistiu = contagem
+    update: dict = {"falhas_nao_localizado": falhas}
+    if desistiu:
+        update["robo_desistiu_em"] = datetime.now(timezone.utc).isoformat()
+    client.table("processos").update(update).eq("id", cnj_id).execute()
+    return desistiu
 
 
 def gravar_duracao(cnj_id: str, segundos: int) -> None:
@@ -648,6 +674,27 @@ def resumir_motivos(motivos: list[str]) -> str | None:
     if not contagem:
         return None
     return max(contagem.items(), key=lambda par: par[1])[0]
+
+
+MARCA_NAO_LOCALIZADO = "não localizado no RUPE"
+# Cerca de três dias, a duas rodadas por dia. Não é menos porque a busca do RUPE
+# falha à toa: em 05/11 o 5000668-21.2024.8.13.0384 voltou "não localizado" às
+# 17h23 e saiu com 300 documentos às 18h11. Não é mais porque cada processo que
+# não aparece custa uns 2 minutos de rodada, e em 05/11 dez deles, tentados duas
+# vezes, envelheceram a sessão do PJe esperando a vez.
+LIMITE_NAO_LOCALIZADO = 6
+
+
+def contar_nao_localizado(motivo: str, falhas_anteriores: int) -> tuple[int, bool] | None:
+    """
+    (falhas somadas, se o robô desiste) depois de uma rodada com este motivo.
+    `None` quando o erro não é de processo não localizado: aí a conta não muda.
+    Função pura — ver test_runner.py.
+    """
+    if MARCA_NAO_LOCALIZADO not in motivo:
+        return None
+    falhas = falhas_anteriores + 1
+    return falhas, falhas >= LIMITE_NAO_LOCALIZADO
 
 
 # Estado de quem o gestor assumiu na mão pelo painel: sai da fila do robô e a
@@ -1217,6 +1264,13 @@ async def processar_por_sistema(
                 motivo = motivo_do_erro(resultado)
                 motivos_erro.append(motivo)
                 marcar_supabase([cnj_id], "erro_browser", motivo)
+                if registrar_nao_localizado(cnj_id, motivo):
+                    print(f"{prefixo} — não achado em {LIMITE_NAO_LOCALIZADO} rodadas: "
+                          "o robô para de tentar e o processo espera alguém no painel")
+                    obs.registrar("cnj.robo_desistiu", ok=False, sistema=sistema,
+                                  numero_cnj=info.numero_cnj,
+                                  detalhe=f"não localizado em {LIMITE_NAO_LOCALIZADO} "
+                                          "rodadas; saiu da fila até alguém decidir no painel")
         obs.registrar("sistema.fim", sistema=sistema,
                       detalhe=f"terminou no minuto "
                               f"{(time.monotonic() - inicio_rodada) / 60:.0f} da rodada")

@@ -12,6 +12,8 @@ from runner import (
     STATUS_TRATADO_MANUAL,
     abas_vazadas,
     aba_de_trabalho,
+    contar_nao_localizado,
+    LIMITE_NAO_LOCALIZADO,
     descrever_abas,
     aviso_publicacao_ignorada,
     decidir_desfecho_cdp,
@@ -260,6 +262,37 @@ def test_devolucao_nao_empilha_camadas():
 def test_devolucao_cabe_no_campo():
     assert len(motivo_devolucao(MOTIVO_CHROME, "x" * 900)) <= 400
     print("OK devolucao_truncada")
+
+
+# ── desistir de quem o RUPE não acha ──────────────────────────────
+# Em 05/11, dez processos não localizados havia semanas foram tentados duas vezes
+# cada, a uns 2 minutos por tentativa, e a sessão do PJe envelheceu esperando a vez.
+
+NAO_LOCALIZADO = ("Processo 5013029-65.2025.8.13.0439 não localizado no RUPE "
+                  "(nenhum resultado na pesquisa)")
+
+
+def test_nao_localizado_soma_uma_falha():
+    assert contar_nao_localizado(NAO_LOCALIZADO, 2) == (3, False)
+    print("OK nao_localizado_soma")
+
+
+def test_nao_localizado_desiste_no_limite():
+    assert contar_nao_localizado(NAO_LOCALIZADO, LIMITE_NAO_LOCALIZADO - 1) == (LIMITE_NAO_LOCALIZADO, True)
+    print("OK nao_localizado_desiste")
+
+
+def test_nao_localizado_antes_do_limite_continua_tentando():
+    _, desistiu = contar_nao_localizado(NAO_LOCALIZADO, LIMITE_NAO_LOCALIZADO - 2)
+    assert not desistiu
+    print("OK nao_localizado_continua")
+
+
+def test_outro_erro_nao_mexe_na_conta():
+    # certificado digital tem o seu próprio caminho (tratar na mão); a conta é só
+    # de quem a busca não encontrou
+    assert contar_nao_localizado(MOTIVO_CERTIFICADO, 4) is None
+    print("OK nao_localizado_outro_erro")
 
 
 # ── limpeza das abas que a extração deixa para trás ───────────────
@@ -568,6 +601,10 @@ if __name__ == "__main__":
     test_devolucao_nao_repete_o_mesmo_motivo()
     test_devolucao_nao_empilha_camadas()
     test_devolucao_cabe_no_campo()
+    test_nao_localizado_soma_uma_falha()
+    test_nao_localizado_desiste_no_limite()
+    test_nao_localizado_antes_do_limite_continua_tentando()
+    test_outro_erro_nao_mexe_na_conta()
     test_aba_aberta_pela_extracao_e_fechada()
     test_aba_que_ja_estava_aberta_nao_e_tocada()
     test_aba_do_henrique_em_outro_site_nao_e_tocada()
